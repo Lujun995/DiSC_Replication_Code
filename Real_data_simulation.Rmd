@@ -1,0 +1,258 @@
+---
+title: "Simulation Based on Real-World Data"
+author: "Lujun Zhang and Jun Chen"
+date: "2023-09-21"
+output:
+  html_document:
+    number_sections: true
+---
+    
+# Setup
+
+-  Required packages: 
+    +  `doParallel`, `foreach`, `doRNG`, `Matrix`, `matrixStats`, `GUniFrac`, `tidyverse`, `Hmisc`, `knitr`, `kableExtra` from CRAN; 
+    +  `DESeq2` from bioconductor; 
+    +  `ideas` from https://github.com/Sun-lab/ideas
+
+
+```{r setup, include=TRUE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(kableExtra)
+library(tidyverse)
+library(Matrix)
+```
+
+# Data Inputs and Preprocessing for Simulation
+
+The simulations are based on cell type "L2/3" found in the region of the prefrontal cortex (PFC) from an autism study conducted by Velmeshev, et al. (2019). The data have been preprocessed in accordance with the procedures outlined in the IDEAS paper and were directly obtained from the link [https://github.com/Sun-lab/ideas_pipeline/tree/main/Autism/data/ct_mtx](https://github.com/Sun-lab/ideas_pipeline/tree/main/Autism/data/ct_mtx) (Zhang et al., 2022).
+
+In the following code chunk, we will read in the `count_matrix`, which comprises count data from single-cell RNA sequencing, as well as metadata indicating cell assignments to specific individuals and diagnoses for autism spectrum disorder (ASD) and healthy controls. We will also perform sparsity filtering, excluding genes appearing in fewer than 20% of cells with a defined threshold of `SPARSITY_THRESHOLD` set at 0.8. For the purpose of simulation, we will discard cells with insufficient sequencing depth, defined by the `DISCARDING` threshold set at 0.10 (representing the bottom 10%, equivalent to a sequencing depth of approximately 5000).
+
+The subsequent code chunk will save the workspace image as "setup0702.RData" in the "real_data_sim/" folder. This image includes the processed sequencing data, metadata, and functions from the "source_code/DiSC.R" script.
+
+
+```{r input}
+rm(list=ls())
+###########################################################
+#remember to copy these after modifying the count matrix
+# ngene = nrow(count_matrix)
+# ncell = ncol(count_matrix)
+# read_depth <- colSums(count_matrix)
+# cat("ngene: ", ngene, "ncell: ", ncell, "read_depth[1:10]: ", read_depth[1:10], "\n")
+###########################################################
+source("source_code/DiSC.R")
+SPARSITY_THRESHOLD = 0.8 #or NULL. Keep genes with sparsity < SPARSITY_THRESHOLD
+DISCARDING = 0.1 # or NULL. Discard cells with read depths < the bottom DISCARDING 
+
+ctypes = c("L2_3", "L4", "Microglia", "Endothelial", "IN-SV2C", "AST-PP", 
+           "IN-VIP", "IN-SST", "IN-PV", "AST-FB", "Oligodendrocytes", 
+           "L5_6", "L5_6-CC", "OPC", "Neu-NRGN-II", "Neu-NRGN-I", "Neu-mat")
+fp = "ideas_pipeline-main/Autism/data/"
+
+ctp  = "L2_3"
+cat("Using cell type:", ctp, "\n")
+## count_matrix, genes in rows and cells in columns
+count_matrix = readRDS(file.path(sprintf("%sct_mtx/PFC_%s.rds", fp, ctp)))
+ngene = nrow(count_matrix)
+ncell = ncol(count_matrix)
+read_depth <- colSums(count_matrix)
+if(ngene < ncell) 
+  warning("the number of genes is smaller than the number of cells, please check if genes are in rows")
+cat("ngene: ", ngene, "ncell: ", ncell, "read_depth[1:10]: ", read_depth[1:10], "\n")
+#### Sparsity filtering
+if(!is.null(SPARSITY_THRESHOLD)){
+  cat("sparsity filtering with threshold ", SPARSITY_THRESHOLD, " :\n")
+  gene2keep = which(rowSums(count_matrix == 0) < SPARSITY_THRESHOLD*ncell)
+  count_matrix = count_matrix[gene2keep,]
+  read_depth = colSums(count_matrix)
+  ngene = nrow(count_matrix)
+  ncell = ncol(count_matrix)
+  read_depth <- colSums(count_matrix)
+  cat("ngene: ", ngene, "ncell: ", ncell, "read_depth[1:10]: ", read_depth[1:10], "\n")
+}
+#### discard insufficiently sequenced cells (for simulation purpose)
+if(!is.null(DISCARDING)){
+  depth = round(quantile(read_depth, probs = DISCARDING))
+  cat("read depth filtering with threshold", DISCARDING, "\n",
+      "which corresponds to a minimal read depth of", depth, ":\n")
+  count_matrix <- count_matrix[, which(read_depth >= depth)]
+  ngene = nrow(count_matrix)
+  ncell = ncol(count_matrix)
+  read_depth <- colSums(count_matrix)
+  cat("ngene: ", ngene, "ncell: ", ncell, "read_depth[1:10]: ", read_depth[1:10], "\n")
+} 
+
+## meta_cell
+meta_raw = read_tsv(file.path(fp, "meta.tsv"), col_types = "cffcfnffffnnnndd")
+meta_cell <- meta_raw %>% filter(region == "PFC") %>%
+  filter(cluster == str_replace(ctp, "_", "/")) %>%
+  dplyr::rename(`cell_id` = "cell")
+if(sum(!(colnames(count_matrix) %in% meta_cell$cell_id)) >0)
+  error("meta_cell and count_matrix dont match") else{
+    meta_cell <- meta_cell %>% filter(cell_id %in% colnames(count_matrix))
+    if(sum(meta_cell$cell_id != colnames(count_matrix)) >0 )
+      error("meta_cell and count_matrix dont match2")
+    meta_cell$read_depth <- read_depth
+  }
+
+## meta_ind
+meta_ind <- meta_cell %>% distinct(individual, .keep_all = TRUE) %>%
+  dplyr::select(-`cell_id`, -`genes`, -`UMIs`, -`RNA mitochondr. percent`,
+         -`RNA ribosomal percent`, -`read_depth`) %>%
+  dplyr::rename(RIN = "RNA Integrity Number")
+nindi = nrow(meta_ind)
+
+save.image("real_data_sim/setup0702.RData")
+```
+
+# Simulation Study (False Discovery Rate and Type I Error)
+
+In the following code chunk, we will generate sbatch shell scripts (.sh) and R scripts (.R) within the "real_data_sim/" directory. These files are designed for execution on a high-performance computing cluster utilizing the Slurm workload manager.
+
+This code segment will permute labels for the variable `diagnosis` (ASD vs. control) and apply different statistical methods to investigate the association between `diagnosis` and single-cell RNA sequencing data. We aim to examine the type I error rates and false discovery rates of these methods. The results will be saved in "real_data_sim/type1_{DATE}.RData."
+
+```{r simulation FDR setup}
+WORKINGDIRECTORY = "/home/guanwh/zhan7474/mayo/real_data_sim/"
+BOOT = 1000 %>% as.character()
+NCORES = 80 %>% as.character()
+DATE = "0715"
+CLASS = "Type1"
+shell_path <- paste("real_data_sim/", CLASS, "_", DATE, ".sh", sep = "")
+Rscript_path <- paste("real_data_sim/", CLASS, "_", DATE, ".R", sep = "")
+
+read_file("source_code/real_sim_type1.sh") %>% 
+  str_replace_all(pattern = "DATE", DATE) %>%
+  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+  str_replace_all(pattern = "CLASS", CLASS) %>%
+  str_replace_all(pattern = "NCORES", NCORES) %>%
+  write_file(file = shell_path, append = FALSE)
+read_file("source_code/real_sim_type1.R") %>% 
+  str_replace_all(pattern = "DATE", DATE) %>%
+  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+  str_replace_all(pattern = "BOOT", BOOT) %>%
+  str_replace_all(pattern = "NCORES", NCORES) %>%
+  write_file(file = Rscript_path, append = FALSE)
+```
+
+-  Shell script (`r shell_path`):
+
+```{bash simulation FDR shell, file = shell_path, eval=FALSE}
+```
+
+-  R script (`r Rscript_path`):
+
+```{r simulation FDR Rscript, file = Rscript_path, eval=FALSE}
+```
+
+-  Run the above scripts on a high performance computer.
+
+# Results and Tables (False discovery rate and Type I error)
+
+-  Extracting results
+
+```{r simulation result description}
+load("real_data_sim/type1_0715.RData")
+
+summarize_binconf <- function(x, repl){
+  # calculate the binomial confidence interval with x successes and repl trials
+  # returns a string
+  CI_95 <- Hmisc::binconf(x = x, n = repl, method=c("wilson"))
+  CI_95 <- round(CI_95*100, digits = 1)
+  CI_95 <- paste(CI_95[,"PointEst"]," (", CI_95[,"Lower"], 
+                 ", ", CI_95[,"Upper"],")", sep="")
+  return(CI_95)
+}
+
+meths = c("DiSC", "IDEAS", "DESeq2")
+pval_list <- list(disc_pval, ideas_pval, deseq_pval) #ordered by meths
+names(pval_list) <- meths
+pval_list <- lapply(pval_list, function(x_pval){
+  #convert the disc_pval to an array
+  # temp <- array(unlist(disc_pval), 
+  #               dim = c(dim(disc_pval[[1]]), boot),
+  #               dimnames = append(dimnames(disc_pval[[1]]), list(NULL)))
+  # identical(temp[,,1], disc_pval[[1]]) #TRUE
+  # identical(temp[,,3], disc_pval[[3]]) #TRUE
+  return(
+    array(unlist(x_pval), 
+          dim = c(dim(x_pval[[1]]), boot), 
+          dimnames = list(NULL, c("raw", "adjusted"), NULL))
+  )# genes, (p.raw, p.adj), boot
+})
+
+nNAs_results <- as.data.frame(lapply(pval_list, FUN = function(xpval){
+  colSums(is.na(xpval[,"adjusted",]))
+}))
+summary(nNAs_results)
+```
+
+-  summarizing tables
+
+```{r simulation FDR Type I}
+thre_raw = 0.05
+thre_adj = 0.10
+FDR_results <- 
+  data.frame(
+    method = meths,
+    p_raw_mean = rep(NA_real_, length(meths)),
+    p_raw_sd = rep(NA_real_, length(meths)),
+    p_raw = rep(NA_character_, length(meths)),
+    fdr = rep(NA_character_, length(meths)),
+    ANFD_mean = rep(NA_real_, length(meths)),
+    ANFD_sd = rep(NA_real_, length(meths)),
+    ANFD = rep(NA_character_, length(meths))
+  )
+FDR_results$fdr <- pval_list %>% 
+  lapply(X = ., FUN = function(x_pval)
+    sum(colSums(x_pval[, "adjusted", ] <= thre_adj, na.rm = TRUE) >0)) %>%
+        #at least one discovery#####################################
+  unlist(.) %>%
+  summarize_binconf(x = ., repl = boot)
+
+FDR_results$ANFD_mean <- pval_list %>% 
+  lapply(X = ., FUN = function(x_pval)
+    mean(colSums(x_pval[, "adjusted", ] <= thre_adj, na.rm = TRUE))) %>%
+         # discoveries in each bootstrap#########################
+  unlist(.) 
+FDR_results$ANFD_sd <- pval_list %>% 
+  lapply(X = ., FUN = function(x_pval)
+    sd(colSums(x_pval[, "adjusted", ] <= thre_adj, na.rm = TRUE))) %>%
+       # discoveries in each bootstrap#########################
+  unlist(.) 
+FDR_results$ANFD <- str_glue("{round(FDR_results$ANFD_mean,1)} ({round(FDR_results$ANFD_mean+1.96*FDR_results$ANFD_sd/sqrt(boot),1)}, {round(FDR_results$ANFD_mean-1.96*FDR_results$ANFD_sd/sqrt(boot),1)})")
+
+FDR_results$p_raw_mean <- pval_list %>%
+  lapply(X = ., FUN = function(x_pval)
+    mean(colMeans(x_pval[, "raw", ] <= thre_raw, na.rm = TRUE))) %>%
+  unlist(.)
+FDR_results$p_raw_sd <- pval_list %>%
+  lapply(X = ., FUN = function(x_pval)
+    sd(colMeans(x_pval[, "raw", ] <= thre_raw, na.rm = TRUE))) %>%
+  unlist(.)
+FDR_results$p_raw <- str_glue("{round(FDR_results$p_raw_mean*100,2)} ({round((FDR_results$p_raw_mean+1.96*FDR_results$p_raw_sd/sqrt(boot))*100,2)}, {round((FDR_results$p_raw_mean-1.96*FDR_results$p_raw_sd/sqrt(boot))*100,2)})")
+
+# Tables
+tbl.temp <- FDR_results %>%
+  select(method, p_raw, fdr, ANFD) %>%
+  rename("Type I error rate (%)" = p_raw) %>%
+  rename("False discovery rate (%)" = fdr) %>%
+  rename("Average number of false positive fundings" = ANFD) %>%
+  kbl() %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+tbl.temp
+save_kable(tbl.temp, file = "results/real_null_fdr.jpeg", 
+           density = 1000, zoom = 2.5)
+```
+
+# Session Info
+
+```{r session info}
+sessionInfo()
+```
+
+
+# References
+
+-    Zhang, M., et al. IDEAS: individual level differential expression analysis for single-cell RNA-seq data. Genome Biol 23, 33 (2022). https://doi.org/10.1186/s13059-022-02605-1.
+-    Velmeshev, D., et al. Single-cell genomics identifies cell type–specific molecular changes in autism. Science 364.6441 (2019): 685-689.

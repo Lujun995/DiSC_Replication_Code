@@ -1,0 +1,11 @@
+#!/bin/bash
+#SBATCH --job-name=resimCLASS
+#SBATCH -o WORKINGDIRECTORYCLASS_DATE.out
+#SBATCH -e WORKINGDIRECTORYCLASS_DATE.err
+#SBATCH -p msismall
+#SBATCH -c NCORES
+#SBATCH --mem-per-cpu=2500
+#SBATCH -t 60:00:00
+
+module load R/4.3.0-openblas
+Rscript WORKINGDIRECTORYCLASS_DATE.R

@@ -1,0 +1,176 @@
+---
+title: "Real-World Data Analysis"
+author: "Lujun Zhang and Jun Chen"
+date: "2023-09-22"
+output:
+  html_document:
+    number_sections: true
+---
+    
+# Setup
+
+-  Required packages: 
+    +  `doParallel`, `foreach`, `doRNG`, `Matrix`, `matrixStats`, `GUniFrac`, `tidyverse`, `data.table`, `Hmisc`, `kableExtra`, `ggVennDiagram`, `reshape2`, `ggpubr` from CRAN; 
+    +  `DESeq2` from bioconductor; 
+    +  `ideas` from [https://github.com/Sun-lab/ideas](https://github.com/Sun-lab/ideas)
+
+
+```{r setup, include=TRUE, warning=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(knitr)
+library(kableExtra)
+library(tidyverse)
+library(ggVennDiagram)
+library(ggpubr)
+library(matrixStats)
+```
+
+
+# Set up the Scripts for High-performance Computing
+
+The following code block generates scripts for high-performance computing, which include an R script and a shell script located in the "real_data_anal" folder. These scripts are designed to analyze the association between autism spectrum disorder (ASD) and single-cell RNA sequencing data, while adjusting for covariates such as `age`, `sex`, sequence batch (`Seqbatch`), and RNA Integrity Number (`RIN`). The data used in these analyses originate from 17 distinct cell types within the prefrontal cortex region as part of an autism study (Velmeshev et al., 2019). The data were preprocessed in accordance with the procedures outlined in the IDEAS paper and were directly downloaded from [https://github.com/Sun-lab/ideas_pipeline/tree/main/Autism/data/ct_mtx](https://github.com/Sun-lab/ideas_pipeline/tree/main/Autism/data/ct_mtx) (Zhang et al., 2022). It's worth noting that genes appearing in fewer than 20% of cells were excluded, with a defined threshold of `SPARSITY_THRESHOLD` set at 0.8.
+
+-  specify the parameters and generate scripts
+
+```{r setting the script}
+#general parameters: WORKINGDIRECTORY, NCORE, DATE, DATADIR, DCADIR
+DATE = "0902" # for version control
+NCORE = 40 %>% as.character()
+MEM = 4000 %>% as.character()
+WORKINGDIRECTORY = "/home/guanwh/zhan7474/mayo/real_data_anal/"
+DATADIR = "/home/guanwh/zhan7474/mayo/ideas_pipeline-main/Autism/data/"
+DCADIR = "/home/guanwh/zhan7474/mayo/ideas_pipeline-main/Autism/dca_PFC_all/"
+
+file.copy(from = "source_code/DiSC.R", to = "real_data_anal/DiSC.R",
+          copy.date = TRUE, overwrite  = TRUE)
+read_file("source_code/autism_anal.R") %>%
+  str_replace_all(pattern = "DATE", DATE) %>%
+  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+  str_replace_all(pattern = "NCORE", NCORE) %>%
+  str_replace_all(pattern = "DATADIR", DATADIR) %>%
+  str_replace_all(pattern = "DCADIR", DCADIR) %>%
+  write_file(file = str_glue("real_data_anal/autism_anal_{DATE}.R"), 
+             append = FALSE)
+read_file("source_code/autism_anal.sh") %>%
+  str_replace_all(pattern = "DATE", DATE) %>%
+  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+  str_replace_all(pattern = "NCORE", NCORE) %>%
+  str_replace_all(pattern = "MEM", MEM) %>%
+  write_file(file = str_glue("real_data_anal/autism_anal_{DATE}.sh"), 
+             append = FALSE)
+```
+
+-  The shell script (`r str_glue("real_data_anal/autism_anal_{DATE}.sh")`)
+
+```{bash shell, file = str_glue("real_data_anal/autism_anal_{DATE}.sh"), eval = FALSE}
+```
+
+-  The R script (`r str_glue("real_data_anal/autism_anal_{DATE}.R")`)
+
+```{r R, file = str_glue("real_data_anal/autism_anal_{DATE}.R"), eval = FALSE}
+```
+
+-  Run the shell (and R) scripts on a high-performance computer
+
+The results will be saved as "real_data_anal/results_autism_pfc_{DDDD}.RData"
+
+
+# Results and Figures
+
+```{r, fig.width=8, fig.height=4}
+myfun_num <- function(pval_array){ # number of findings using FDR adjustment
+  num <- apply(pval_array[, "adjusted", , drop = TRUE], simplify = TRUE, MARGIN = 1, 
+               FUN = function(pval_vec){
+                 num = sum(pval_vec <= 0.20, na.rm = TRUE)
+                 return(num)
+               })
+  return(num)
+}
+myfun_nms <- function(pval_array){ # names of genes
+  nms <- apply(pval_array[, "adjusted", , drop = TRUE], simplify = FALSE, MARGIN = 1, 
+               FUN = function(pval_vec){
+                 nms = names(pval_vec)[which(pval_vec <= 0.20)]
+                 return(nms)
+               })
+  return(nms)
+}
+
+load("real_data_anal/results_autism_pfc_0902.RData")
+# save(SPARSITY_THRESHOLD, pval_array_list, 
+#      file = str_glue("results_autism_pfc_{DDDD}.RData"))
+
+ctypes <- names(pval_array_list)
+meths  <- c("DiSC", "IDEAS", "DESeq2")
+meths_l<- c("disc", "ideas", "deseq")
+
+num_mat <- pval_array_list %>% 
+  lapply(X = ., FUN = myfun_num) %>%
+  do.call(what = rbind, args = .)
+num_mat <- num_mat[, meths_l]
+num_df <- num_mat %>%
+  reshape2::melt(data = ., value.name = "num_fdr", 
+                 varnames = c("Cell_types", "Methods")) %>%
+  mutate(Methods = factor(Methods)) %>%
+  mutate(Methods = fct_recode(Methods, DiSC = "disc", DESeq2 = "deseq", 
+                              IDEAS = "ideas")) %>%
+  mutate(Methods = fct_relevel(Methods, meths)) %>%
+  mutate(Cell_types = factor(Cell_types)) %>%
+  mutate(Cell_types = 
+           fct_relevel(Cell_types, 
+                       names(sort(num_mat[, "disc"] - num_mat[, "ideas"], 
+                                  decreasing = FALSE))))
+figure1 <- num_df %>% 
+  ggplot(., aes(x=Cell_types, color=Methods, fill=Methods, y=num_fdr)) +
+  geom_bar(stat = "identity", 
+           position = position_dodge2(padding = 0.6, reverse = TRUE), 
+           width=0.7) + 
+  scale_y_sqrt()+
+  xlab("Cell Types") + 
+  ylab("Number of positive findings")+
+  theme_bw() + coord_flip() + 
+  scale_color_brewer(palette = "Set1") + 
+  scale_fill_brewer(palette = "Set1") +
+  theme(legend.position='bottom')
+figure1
+
+which.max(rowMeans(num_mat)) #Neu-NRGN-II
+which.max(rowMedians(num_mat))
+cell_to_disp <- names(which.max(rowMeans(num_mat))) 
+nms_list <- lapply(X = pval_array_list, FUN = myfun_nms)
+
+Venn <- nms_list[[cell_to_disp]][meths_l]
+names(Venn) <- meths
+figure2 <- ggVennDiagram(Venn, label = c("count")) + 
+  scale_color_brewer(palette = "Set1") + 
+  # scale_fill_binned(type = "Greys")
+  scale_fill_binned(type = "gradient",
+                       high = "grey60", 
+                       low = "grey100", name = "Counts") +
+  scale_x_continuous(expand = expansion(mult = .2))+
+  theme(legend.position='bottom')
+figure2
+figures <- ggarrange(figure1, figure2,  
+          labels = c("(a)", "(b)"), 
+          font.label = list(size = 14, color = "black", 
+                            face = "plain", family = NULL),
+          ncol = 2, nrow = 1)
+figures
+ggsave(filename = "results/autism_anal.pdf" , figures,
+       width = 8, height = 4)
+ggsave(filename = "results/autism_anal.jpeg" , figures,
+       width = 8, height = 4)
+```
+
+
+
+
+# Session info
+
+```{r session info}
+sessionInfo()
+```
+
+# References
+
+-    Zhang, M., et al. IDEAS: individual level differential expression analysis for single-cell RNA-seq data. Genome Biol 23, 33 (2022). https://doi.org/10.1186/s13059-022-02605-1.
+-    Velmeshev, D., et al. Single-cell genomics identifies cell type–specific molecular changes in autism. Science 364.6441 (2019): 685-689.

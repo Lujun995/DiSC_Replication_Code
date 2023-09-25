@@ -1,0 +1,1087 @@
+---
+title: "Simulations Based on Parametric Models"
+author: "Lujun Zhang and Jun Chen"
+date: "2023-09-21"
+output:
+  html_document:
+    number_sections: true
+---
+
+# Setups
+
+-  Required packages: 
+    +  `doParallel`, `foreach`, `doRNG`, `Matrix`, `matrixStats`, `GUniFrac`, `tidyverse`, `data.table`, `Hmisc`, `kableExtra`, `ggpubr` from CRAN; 
+    +  `DESeq2` from bioconductor; 
+    +  `ideas` from [https://github.com/Sun-lab/ideas](https://github.com/Sun-lab/ideas)
+
+```{r setup, warning = FALSE, message=FALSE}
+# library(DESeq2)
+library(doParallel)
+library(foreach)
+library(doRNG)
+library(ideas)
+library(Matrix)
+library(tidyverse)
+library(GUniFrac)
+library(matrixStats)
+library(data.table)
+library(kableExtra)
+library(ggpubr)
+
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(seed = 123456)
+
+# rm(list = ls())
+source("source_code/DiSC.R")
+```
+
+# Parametric Simulations: Data Generation
+
+## Simulation Design and Related Parameters
+
+The parametric simulation includes the study of 4 scenarios and 3 types of changes. The following code block will generate a text file named "simulation_parameters_{DATE}.txt" containing simulation design parameters in the "para_data_sim/" folder.
+
+-   Scenario 1: Increased effect sizes (default 1.3)
+-   Scenario 2: Increased cell numbers (in real-world data, mean cell number = 375)
+-   Scenario 3: Increased sample sizes (in real-world data, sample size = 23)
+-   Scenario 4: No difference. This scenario is designed to examine type I error and FDR.
+-   We studied three types of changes: difference in mean, difference in variance, and difference in both mean and variance.
+
+```{r parameters for simulation}
+# parameter sets
+VNCELL = c(FALSE) %>% as.character()
+DIFF = c(1.1, 1.2, 1.3, 1.4, 1.5) %>% as.character()
+NPG = c(5, 12, 20, 35, 50) %>% as.character() #n per group
+NCELL = c(250, 375, 500) %>% as.character()
+DATE = "0811" # for version control
+# file.create(str_glue("para_data_sim/simulation_parameters_{DATE}.txt"), 
+#             showWarnings = FALSE )
+parameters <- vector(mode = "character", length = 100)
+para <- 1
+
+# scenario 1: effect sizes
+for(h in 1) #VNCELL
+  for(i in 1:length(DIFF)) #DIFF
+    for(j in 2) #NCELL
+      for(k in 2){ #NPG
+        parameters[para] <- str_glue("VNCELL={VNCELL[h]};DIFF={DIFF[i]};NCELL={NCELL[j]};NPG={NPG[k]};BOOT=50")
+        para = para+1
+      }
+# scenario 2: cell number
+for(h in 1) #VNCELL
+  for(i in 3) #DIFF
+    for(j in 1:length(NCELL)) #NCELL
+      for(k in 2){ #NPG
+        parameters[para] <- str_glue("VNCELL={VNCELL[h]};DIFF={DIFF[i]};NCELL={NCELL[j]};NPG={NPG[k]};BOOT=50")
+        para = para+1
+      }
+
+# scenario 3: sample sizes
+BOOT = 50
+for(h in 1) #VNCELL
+  for(i in 3) #DIFF
+    for(j in 2) #NCELL
+      for(k in 1:length(NPG)){ #NPG
+        parameters[para] <- str_glue("VNCELL={VNCELL[h]};DIFF={DIFF[i]};NCELL={NCELL[j]};NPG={NPG[k]};BOOT=50")
+        para = para+1
+      }
+# scenario 4: type I error and FDR
+parameters[para] <- "VNCELL=FALSE;DIFF=1;NCELL=375;NPG=12;BOOT=1000"
+para = para+1
+
+parameters <- parameters[parameters != ""]
+parameters <- parameters[!duplicated(parameters)]
+parameters
+para_out <- str_glue("simulation_parameters_{DATE}.txt")
+write_file(str_c(parameters, collapse = ":"), 
+           file = str_glue("para_data_sim/{para_out}"), 
+           append = FALSE)
+```
+
+
+## Parameters that were Estimated from Real Data 
+
+The following code block outputs "para_data_sim/setup{DATE}.RData." The code chunk was modified from the simulation plan in the [IDEAS paper](https://github.com/Sun-lab/ideas_pipeline/blob/main/simulation/step1_simulate_data.R) (Zhang et al., 2022). It starts with the parameters estimated from real-world data (the autism study, Velmeshev et al., 2019) using DCA (Eraslan et al., 2019) at a cell level. It retains the top 8000 abundant genes (approximately, excluding those genes that appear in fewer than 20% of cells). It summarizes cell-level estimations at an individual level for simulation.
+
+Due to file size limitations, the parameters estimated from the autism study (Velmeshev et al., 2019) cannot be uploaded to GitHub. The list of unuploaded files includes "ideas_pipeline-main/Autism/dca_PFC_all/L2_3_dispersion.tsv.gz," "ideas_pipeline-main/Autism/dca_PFC_all/L2_3_mean.tsv.gz," and "ideas_pipeline-main/Autism/dca_PFC_all/L2_3_pi.tsv.gz." The data will be provided upon request; otherwise, the subsequent simulation and analysis can also be resumed with the provided "para_data_sim/setup{DATE}.RData."
+
+```{r parameters obs}
+set.seed(seed = 123456)
+ngene_2_keep = 8000 
+signal_density = 0.05
+fp = "ideas_pipeline-main/Autism/data/"
+DATE = "0811" # for version control
+
+ctp  = "L2_3"
+cat("Using cell type:", ctp, "\n")
+
+## count_matrix, genes in rows and cells in columns
+count_matrix <- readRDS(file.path(sprintf("%sct_mtx/PFC_%s.rds", fp, ctp)))
+ngene <- nrow(count_matrix)
+ncell <- ncol(count_matrix)
+read_depth <- colSums(count_matrix)
+if(ngene < ncell) 
+  warning("the number of genes is smaller than the number of cells, please check if genes are in rows")
+cat("ngene: ", ngene, "ncell: ", ncell, "read_depth[1:10]: ", read_depth[1:10], "\n")
+
+## Sparsity filtering
+sparsity <- rowSums(count_matrix == 0)/ncell
+summary(sparsity)
+cat("keep top ", ngene_2_keep, "abundant genes :\n")
+gene2keep <- (rank(sparsity) <= ngene_2_keep)
+count_matrix <- count_matrix[gene2keep,]
+ngene = nrow(count_matrix)
+ncell = ncol(count_matrix)
+read_depth <- colSums(count_matrix)
+sparsity <- rowSums(count_matrix == 0)/ncell
+cat("after sparsity filtering, ngene: ", ngene, "ncell: ", ncell, "read_depth[1:10]: ", read_depth[1:10], "\n")
+summary(sparsity)
+
+## re-sample gene index for differential expression
+diff_ngene    <- round(ngene*signal_density)
+special_index <- sample.int(ngene, diff_ngene*3)
+mean_index    <- as.numeric(special_index[              1 :   diff_ngene])
+var_index     <- as.numeric(special_index[(  diff_ngene+1):(2*diff_ngene)])
+mean_var_index<- as.numeric(special_index[(2*diff_ngene+1):(3*diff_ngene)])
+EE_index      <- (1:ngene)[-special_index]
+gene_index <- list(mean_index=mean_index, 
+                   var_index=var_index, 
+                   mean_var_index = mean_var_index,
+                   EE_index=EE_index)
+if(sum(unlist(lapply(gene_index, length))) != ngene) 
+  stop("number of genes in gene_index != ngene")
+if(gene_index[[1]][1] != 3132) 
+  # gene_index will be used in both simulation and illustration
+  warning("the random seed has been changed")
+# > gene_index[[1]][1:10]
+#  [1] 3132  234 1066 6001 7294 4807 2285 6326 7396 2790
+
+## read in denoised ZINB parameters (DCA model output) of the raw counts
+fp = "ideas_pipeline-main/Autism/dca_PFC_all/"
+dca_mean = fread(paste(fp, ctp, "_mean.tsv.gz", sep=""))
+dca_disp = fread(paste(fp, ctp, "_dispersion.tsv.gz", sep=""))
+dca_pi   = fread(paste(fp, ctp, "_pi.tsv.gz", sep="")) # dropout probability
+if(sum(dca_mean$V1[gene2keep] != rownames(count_matrix)) == 0){
+  t_mean = data.matrix(dca_mean[,-1, with=FALSE])
+  t_disp = data.matrix(dca_disp[,-1, with=FALSE])
+  t_drop = data.matrix(dca_pi[,-1, with=FALSE])
+  rownames(t_mean) = dca_mean$V1
+  rownames(t_disp) = dca_disp$V1
+  rownames(t_drop) = dca_pi$V1
+  t_mean = t_mean[gene2keep,]
+  t_disp = t_disp[gene2keep,]
+  t_drop = t_drop[gene2keep,]
+  rm(dca_mean, dca_disp, dca_pi)
+} else stop("dca output does not match count_matrix")
+
+## summarize these parameters at individual level
+## we want to estimate the individual_log_mean, individual_log_disp, and 
+## individual_logit_drop per gene and per individual, by averaging across cells. 
+## In addition, we want to estimate the sd of individual_log_mean, after 
+## removing the variation due to read-depth difference.
+tapply_median <- function(x){tapply(x, individual_ids, median)}
+# median of x at the individual level for each gene
+tapply_sd <- function(x){tapply(x, individual_ids, sd)}
+individual_ids <- colnames(t_mean) %>% 
+  str_split(pattern = "_") %>%
+  sapply(X=., FUN = function(x){paste(x[-1], collapse="_")})
+
+cell_mean_sum = colSums(t_mean) # sum of ZINB mean in one cell in the denoised data.
+cor(cell_mean_sum, colSums(count_matrix)) #0.9988
+log_t_mean   = log(t(t(t_mean)*(10000/cell_mean_sum))) #denoised mean / cell total  
+logit_t_drop = log(t_drop/(1 - t_drop))
+
+# remove the variation due to read-depth difference before estimation of the sd
+xmt = model.matrix(~log(cell_mean_sum))
+log_t_mean_resid = matrix(NA, nrow=nrow(t_mean), ncol=ncol(t_mean))
+coef = matrix(NA, nrow=nrow(log_t_mean), ncol=2)
+for(i in 1:nrow(log_t_mean)){# for each gene
+  yi = log_t_mean[i,]
+  li = lm.fit(x=xmt, y=yi)
+  coef[i,] = li$coefficients
+  log_t_mean_resid[i,] = li$residuals
+}
+
+individual_log_mean   = t(apply(log_t_mean,   1, tapply_median))
+#median of t_mean at the individual level at each gene
+#apply median over different cells in one individual, the index in 
+#tapply is the invidual index and the rownames of log_t_mean are in 
+#the form of cellcode_indivual and individual ID. ("AAACCTGCACCCATTC-1_4341_BA46")
+individual_log_disp   = t(apply(log(t_disp),  1, tapply_median))
+individual_logit_drop = t(apply(logit_t_drop, 1, tapply_median))
+individual_log_mean_sd = t(apply(log_t_mean_resid, 1, tapply_sd))
+# the sd of log_mean across individuals: it is calculted by 
+# taking the median of log_mean within individual, and then 
+# calculate sd across individuals
+
+dim(individual_log_mean) #8000 genes 23 individuals
+individual_log_mean[1:2,1:3]
+summary(c(individual_log_mean))
+
+dim(individual_log_disp)
+individual_log_disp[1:2,1:3]
+summary(c(individual_log_disp))
+
+dim(individual_logit_drop)
+individual_logit_drop[1:2,1:3]
+summary(c(individual_logit_drop))
+
+dim(individual_log_mean_sd)
+individual_log_mean_sd[1:2,1:3]
+summary(c(individual_log_mean_sd))
+
+rm(list = c("t_mean", "t_disp", "t_drop", 
+            "log_t_mean", "log_t_mean_resid", "logit_t_drop"))
+
+## meta_cell to estimate n_cell_obs
+fp = "ideas_pipeline-main/Autism/data/"
+meta_raw = read_tsv(file.path(fp, "meta.tsv"), col_types = "cffcfnffffnnnndd")
+meta_cell <- meta_raw %>% filter(region == "PFC") %>%
+  filter(cluster == str_replace(ctp, "_", "/")) %>%
+  dplyr::rename(`cell_id` = "cell")
+if(sum(!(colnames(count_matrix) %in% meta_cell$cell_id)) >0)
+  error("meta_cell and count_matrix dont match") else{
+    meta_cell <- meta_cell %>% filter(cell_id %in% colnames(count_matrix))
+    if(sum(meta_cell$cell_id != colnames(count_matrix)) >0 )
+      error("meta_cell and count_matrix dont match2")
+    meta_cell$read_depth <- read_depth
+  }
+n_cell_obs <- meta_cell %>% 
+  group_by(individual) %>% 
+  summarise(n=n()) %>% 
+  summarise(mean = mean(n), sd = sd(n))
+n_cell_obs[["mean"]][1] #375
+
+
+## meta_ind
+fp = "ideas_pipeline-main/Autism/data/"
+meta_raw = read_tsv(file.path(fp, "meta.tsv"), col_types = "cffcfnffffnnnndd")
+meta_ind <- meta_raw %>% filter(region == "PFC") %>%
+  filter(cluster == str_replace(ctp, "_", "/")) %>%
+  distinct(individual, .keep_all = TRUE) %>%
+  dplyr::select(-`cell`, -`genes`, -`UMIs`, 
+                -`RNA mitochondr. percent`,
+                -`RNA ribosomal percent`) %>%
+  dplyr::rename(RIN = "RNA Integrity Number",
+                PMI = "post-mortem interval (hours)")
+table(meta_ind$diagnosis) 
+
+## effects of covariates
+table(meta_ind$sex, meta_ind$diagnosis)
+table(meta_ind$Seqbatch, meta_ind$diagnosis)
+table(meta_ind$sample == colnames(individual_log_mean))
+
+pvals = matrix(NA, nrow=ngene, ncol=4)
+colnames(pvals) = c("age", "sex", "seqBatch", "RIN")
+
+for(i in 1:ngene){
+  yi = individual_log_mean[i,]#individual-level gene expression (median across cells)
+  lmi = lm(yi ~ age, data=meta_ind)
+  pvals[i,1] = as.numeric(summary(lmi)$coefficients[2,4])
+  
+  lmi = lm(yi ~ sex, data=meta_ind)
+  pvals[i,2] = as.numeric(summary(lmi)$coefficients[2,4])
+  
+  lmi = lm(yi ~ Seqbatch, data=meta_ind)
+  pvals[i,3] = as.numeric(summary(lmi)$coefficients[2,4])
+  
+  lmi = lm(yi ~ RIN, data=meta_ind)
+  pvals[i,4] = as.numeric(summary(lmi)$coefficients[2,4])
+}
+summary(pvals)# age slightly, sex no, seqBatch & RIN very significant
+
+# covariate at the individual level
+# first apply a normal quantile transformation to RIN, so that 
+# later we can simply simulate RIN from standard normal distribution
+normscore <- function(vec) {
+  len  = length(na.omit(vec))+1
+  rank = rank(na.omit(vec))
+  ties = (rank - floor(rank)) > 0
+  new.vec = vec[!is.na(vec)]
+  new.vec[!ties]=qnorm(rank[!ties]/len)
+  new.vec[ties] =0.5*(qnorm((rank[ties]+0.5)/len)+qnorm((rank[ties]-0.5)/len))
+  vec[!is.na(vec)] = new.vec
+  vec
+}
+RIN.qn <- normscore(meta_ind$RIN)
+
+# estimate 4 parameters for each gene **across individuals** based on 
+# a multivariate-normal distribution estimation for 
+# log_mean, log_disp, logit_drop, log of log_mean_sd.
+# at the population level, assume the log_mean, disp, mean_sd follows a MVN
+# estimate the effects of the normal-quantile-transformed covariate
+cov_matrix_list <- vector(mode = "list", length = ngene)
+beta_list <- vector(mode = "list", length = ngene)
+for (ig in 1:ngene) {# index of gene
+  individual_data <- cbind(
+    c(individual_log_mean[ig, ]),
+    c(individual_log_disp[ig, ]),
+    c(individual_logit_drop[ig, ]),
+    c(log(individual_log_mean_sd[ig, ]))
+  )# 23 rows with the 4 variables
+  
+  # individual_data_mean <- apply(individual_data, 2, mean, na.rm = TRUE) # length of 4
+  cov_matrix <- cov(individual_data)# the covariance between individual_log_mean,
+  #individual_log_disp, individual_logit_drop and individual_log_mean_sd
+  cov_matrix_list[[ig]] <- cov_matrix
+  
+  log_mean_ig <- individual_data[,1]
+  lmi  <- lm(log_mean_ig ~ RIN.qn)
+  beta <- lmi$coefficients # beta: how effective RIN (normal) is in log_mean_ig
+  beta_list[[ig]] <- beta
+}
+
+est_out <- str_glue("setup{DATE}.RData")
+save(list = c("gene_index", "cov_matrix_list", "beta_list",
+              "individual_log_mean", "individual_log_disp", 
+              "individual_logit_drop", "individual_log_mean_sd"), 
+     file = str_glue("para_data_sim/{est_out}"))
+```
+
+## Set up the Script for Simulations
+
+The following code chunk will generate scripts for high-performance computing, including R and shell scripts, under the folder "para_data_sim". The code was modified from the simulation plan in the [IDEAS paper](https://github.com/Sun-lab/ideas_pipeline/blob/main/simulation/step1_simulate_data.R) (Zhang et al., 2022).
+
+
+```{r parameters conf}
+DATE = "0811" # version control
+WORKINGDIRECTORY = "/home/guanwh/zhan7474/mayo/para_data_sim/"
+MEM = 1500 %>% as.character()
+NCORE = min(80, round(200000/as.numeric(MEM), digits = -1)) %>% as.character()
+para_out
+PARA_OUT = para_out
+est_out
+EST_OUT = est_out
+
+# specify the simulation model
+read_file("source_code/gen_sim_data.R") %>%
+  str_replace_all(pattern = "DATE", DATE) %>%
+  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+  str_replace_all(pattern = "NCORE", NCORE) %>%
+  str_replace_all(pattern = "PARA_OUT", PARA_OUT) %>%
+  str_replace_all(pattern = "EST_OUT", EST_OUT) %>%
+  write_file(file = str_glue("para_data_sim/gen_sim_data_{DATE}.R"), 
+             append = FALSE)
+# shell file
+read_file("source_code/gen_sim_data.sh") %>%
+  str_replace_all(pattern = "DATE", DATE) %>%
+  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+  str_replace_all(pattern = "NCORE", NCORE) %>%
+  str_replace_all(pattern = "MEM", MEM) %>%
+  write_file(file = str_glue("para_data_sim/gen_sim_data_{DATE}.sh"), 
+             append = FALSE)
+
+simu_d = DATE
+```
+
+-  Shell script (`r str_glue("para_data_sim/gen_sim_data_{simu_d}.sh")`)
+
+```{bash simulation model shell, file = str_glue("para_data_sim/gen_sim_data_{simu_d}.sh"), eval = FALSE}
+```
+
+-  R script (`r str_glue("para_data_sim/gen_sim_data_{simu_d}.R")`)
+
+```{r simulation model script, file = str_glue("para_data_sim/gen_sim_data_{simu_d}.R"), eval = FALSE}
+```
+
+## Generate Simulation Datasets
+
+-  Run the scripts above on a super computer
+-  The scripts will generate a series of simulation data sets "n{n_cas}_{n_ctr}_d{diff}_c{n_cell}_v{neq_n_cell}_{dddd}_b{b}.RData" under the folder "para_data_sim/"
+
+# Paramteric Simulations: Examination of Different Methods
+
+## Set up the R and Shell Scripts for an Examination of Different methods
+
+-  The following code chunk will generate scripts for high-performance computing, including R script and shell files under the folder "para_data_sim".
+-  Simulations are categorized according to their `NPG` (or `n_per_group`), which determines how much memory is required.
+
+```{r parameteric simualtion setup}
+DATE = "0811" 
+WORKINGDIRECTORY = "/home/guanwh/zhan7474/mayo/para_data_sim/"
+simu_d
+SIMU_D = simu_d
+para_out
+PARA_OUT = para_out
+
+file.copy(from = "source_code/DiSC.R", to = "para_data_sim/DiSC.R",
+          copy.date = TRUE, overwrite  = TRUE)
+# file.copy(from = "source_code/exam_sim_data_resume.R",
+#           to = str_glue("para_data_sim/exam_sim_data_resume_0805.R"),
+#           copy.date = TRUE, overwrite  = TRUE)
+
+# category 1: sample size in [0, 12.1)
+MEM = 2500 %>% as.character()
+NCORE = min(80, round(200000/as.numeric(MEM), digits = -1)) %>% as.character()
+NLIM_1 = 0 %>% as.character()
+NLIM_2 = 12.1 %>% as.character()
+CAT = 1 %>% as.character()
+read_file("source_code/exam_sim_data.sh") %>% 
+  str_replace_all(pattern = "DATE", DATE) %>%
+  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+  str_replace_all(pattern = "NCORE", NCORE) %>%
+  str_replace_all(pattern = "MEM", MEM) %>%
+  str_replace_all(pattern = "CAT", CAT) %>%
+  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.sh"), 
+             append = FALSE)
+# WORKINGDIRECTORY, NCORE, NLIM_1, NLIM_2, 
+# PARA_OUT, SIMU_D, CAT
+read_file("source_code/exam_sim_data.R") %>% # no DATE but SIMU_D!!!
+  str_replace_all(pattern = "SIMU_D", SIMU_D) %>%
+  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+  str_replace_all(pattern = "NCORE", NCORE) %>%
+  str_replace_all(pattern = "NLIM_1", NLIM_1) %>%
+  str_replace_all(pattern = "NLIM_2", NLIM_2) %>%
+  str_replace_all(pattern = "PARA_OUT", PARA_OUT) %>%
+  str_replace_all(pattern = "CAT", CAT) %>%
+  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.R"), 
+             append = FALSE)
+
+# category 2: sample size in [12.1, 20.1)
+MEM = 4000 %>% as.character()
+NCORE = min(80, round(200000/as.numeric(MEM), digits = -1)) %>% as.character()
+NLIM_1 = 12.1 %>% as.character()
+NLIM_2 = 20.1 %>% as.character()
+CAT = 2 %>% as.character()
+read_file("source_code/exam_sim_data.sh") %>% 
+  str_replace_all(pattern = "DATE", DATE) %>%
+  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+  str_replace_all(pattern = "NCORE", NCORE) %>%
+  str_replace_all(pattern = "MEM", MEM) %>%
+  str_replace_all(pattern = "CAT", CAT) %>%
+  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.sh"), 
+             append = FALSE)
+# WORKINGDIRECTORY, NCORE, NLIM_1, NLIM_2, 
+# PARA_OUT, SIMU_D, CAT
+read_file("source_code/exam_sim_data.R") %>% # no DATE but SIMU_D!!!
+  str_replace_all(pattern = "SIMU_D", SIMU_D) %>%
+  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+  str_replace_all(pattern = "NCORE", NCORE) %>%
+  str_replace_all(pattern = "NLIM_1", NLIM_1) %>%
+  str_replace_all(pattern = "NLIM_2", NLIM_2) %>%
+  str_replace_all(pattern = "PARA_OUT", PARA_OUT) %>%
+  str_replace_all(pattern = "CAT", CAT) %>%
+  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.R"), 
+             append = FALSE)
+
+# category 3: sample size in [20.1, 35.1)
+MEM = 7000 %>% as.character()
+NCORE = min(80, round(200000/as.numeric(MEM), digits = -1)) %>% as.character()
+NLIM_1 = 20.1 %>% as.character()
+NLIM_2 = 35.1 %>% as.character()
+CAT = 3 %>% as.character()
+read_file("source_code/exam_sim_data.sh") %>% 
+  str_replace_all(pattern = "DATE", DATE) %>%
+  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+  str_replace_all(pattern = "NCORE", NCORE) %>%
+  str_replace_all(pattern = "MEM", MEM) %>%
+  str_replace_all(pattern = "CAT", CAT) %>%
+  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.sh"), 
+             append = FALSE)
+# WORKINGDIRECTORY, NCORE, NLIM_1, NLIM_2, 
+# PARA_OUT, SIMU_D, CAT
+read_file("source_code/exam_sim_data.R") %>% # no DATE but SIMU_D!!!
+  str_replace_all(pattern = "SIMU_D", SIMU_D) %>%
+  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+  str_replace_all(pattern = "NCORE", NCORE) %>%
+  str_replace_all(pattern = "NLIM_1", NLIM_1) %>%
+  str_replace_all(pattern = "NLIM_2", NLIM_2) %>%
+  str_replace_all(pattern = "PARA_OUT", PARA_OUT) %>%
+  str_replace_all(pattern = "CAT", CAT) %>%
+  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.R"), 
+             append = FALSE)
+
+# category 4: sample size in [35.1, 50.1)
+MEM = 10000 %>% as.character()
+NCORE = min(80, round(200000/as.numeric(MEM), digits = -1)) %>% as.character()
+NLIM_1 = 35.1 %>% as.character()
+NLIM_2 = 50.1 %>% as.character()
+CAT = 4 %>% as.character()
+read_file("source_code/exam_sim_data.sh") %>% 
+  str_replace_all(pattern = "DATE", DATE) %>%
+  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+  str_replace_all(pattern = "NCORE", NCORE) %>%
+  str_replace_all(pattern = "MEM", MEM) %>%
+  str_replace_all(pattern = "CAT", CAT) %>%
+  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.sh"), 
+             append = FALSE)
+# WORKINGDIRECTORY, NCORE, NLIM_1, NLIM_2, 
+# PARA_OUT, SIMU_D, CAT
+read_file("source_code/exam_sim_data.R") %>% # no DATE but SIMU_D!!!
+  str_replace_all(pattern = "SIMU_D", SIMU_D) %>%
+  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+  str_replace_all(pattern = "NCORE", NCORE) %>%
+  str_replace_all(pattern = "NLIM_1", NLIM_1) %>%
+  str_replace_all(pattern = "NLIM_2", NLIM_2) %>%
+  str_replace_all(pattern = "PARA_OUT", PARA_OUT) %>%
+  str_replace_all(pattern = "CAT", CAT) %>%
+  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.R"), 
+             append = FALSE)
+
+# category T1: Type 1 error rate and FDR
+MEM = 2500 %>% as.character()
+NCORE = min(80, round(200000/as.numeric(MEM), digits = -1)) %>% as.character()
+NLIM_1 = 0 %>% as.character()
+NLIM_2 = 12.1 %>% as.character()
+CAT = "T1" %>% as.character()
+read_file("source_code/exam_sim_data.sh") %>% 
+  str_replace_all(pattern = "DATE", DATE) %>%
+  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+  str_replace_all(pattern = "NCORE", NCORE) %>%
+  str_replace_all(pattern = "MEM", MEM) %>%
+  str_replace_all(pattern = "CAT", CAT) %>%
+  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.sh"), 
+             append = FALSE)
+# WORKINGDIRECTORY, NCORE, NLIM_1, NLIM_2, 
+# PARA_OUT, SIMU_D, CAT
+read_file("source_code/exam_sim_data.R") %>% # no DATE but SIMU_D!!!
+  str_replace_all(pattern = "SIMU_D", SIMU_D) %>%
+  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+  str_replace_all(pattern = "NCORE", NCORE) %>%
+  str_replace_all(pattern = "NLIM_1", NLIM_1) %>%
+  str_replace_all(pattern = "NLIM_2", NLIM_2) %>%
+  str_replace_all(pattern = "PARA_OUT", PARA_OUT) %>%
+  str_replace_all(pattern = "CAT", CAT) %>%
+  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.R"), 
+             append = FALSE)
+
+# exam_d = simu_d # simu_d is actually used to denote the results in the script,
+# "results" should correspond directly to simulated data
+```
+
+-  Example shell script (`r str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.sh")`)
+
+```{bash, file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.sh"), eval = FALSE}
+```
+
+-  Example R script (`r str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.R")`)
+
+```{r, file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.R"), eval = FALSE}
+```
+
+## Examining the Association between Treatment and Transcriptomic profiles using Different Methods
+
+Run the scripts above on a supercomputer to test the association between phenotype and single-cell RNA sequencing data. The results will be saved as 'results_n{n_cas}_{n_ctr}_d{diff}_c{n_cell}v{neq_n_cell}{DATE}.RData.'"
+
+
+# Paramteric Simulations: Results
+
+## Combining results from different scenarios
+
+Summarizing results and investigating the type I error, false discovery rate (FDR) and/or false discovery proportions (FDP), and the number of true positive findings using adjusted and unadjusted P-values from different methods.
+
+```{r results extraction}
+# simu_d is actually used to denote the results in the script above,
+# "results" should correspond directly to simulated data
+DATE = simu_d
+thre_raw = 0.05
+thre_adj = 0.10
+meths = c("DiSC", "IDEAS", "DESeq2") 
+
+summarize_binconf <- function(x, repl){
+  # calculate the binomial confidence interval with x successes and repl trials
+  # returns a string
+  CI_95 <- Hmisc::binconf(x = x, n = repl, method=c("wilson"))
+  CI_95 <- round(CI_95*100, digits = 1)
+  CI_95 <- paste(CI_95[,"PointEst"]," (", CI_95[,"Lower"],
+                 ", ", CI_95[,"Upper"],")", sep="")
+  return(CI_95)
+}
+
+and_adj <- fdp_adj <- p_raw <- 
+  data.frame(method = character(), genestra = character(), 
+             diff = numeric(), n_sample = integer(),
+             n_cell = integer(), neq_n_cell = logical(),
+             values = numeric(), sd = numeric(), se = numeric())
+
+for(paras in parameters){
+  eval(parse(text=paras))
+  boot = BOOT
+  diff = exp(abs(log(DIFF))) #promise diff >= 1
+  n_cas = NPG
+  n_ctr = NPG
+  nall = n_cas + n_ctr
+  neq_n_cell = VNCELL
+  n_cell= NCELL
+  n_stra = length(gene_index)
+
+  conf <- str_glue("n{n_cas}_{n_ctr}_d{diff}_c{n_cell}_v{neq_n_cell}_{DATE}")
+  if(!file.exists(str_glue("para_data_sim/results_{conf}.RData")))
+    next
+  load(str_glue("para_data_sim/results_{conf}.RData")) # "disc_pval", "ideas_pval", "deseq_pval"
+  cat(str_glue("loaded {conf}\n"))
+  
+  pval_list <- list(disc_pval, ideas_pval, deseq_pval)
+  names(pval_list) <- meths
+  pval_list <- lapply(pval_list, function(x_pval){
+    #convert the disc_pval to an array
+    # temp <- array(unlist(disc_pval), 
+    #               dim = c(dim(disc_pval[[1]]), boot),
+    #               dimnames = append(dimnames(disc_pval[[1]]), list(NULL)))
+    # identical(temp[,,1], disc_pval[[1]]) #TRUE
+    # identical(temp[,,3], disc_pval[[3]]) #TRUE
+    return(
+      array(unlist(x_pval), 
+            dim = c(dim(x_pval[[1]]), boot), 
+            dimnames = list(NULL, c("raw", "adjusted"), NULL))
+    )# genes, (p.raw, p.adj), boot
+  })
+  
+  nNAs_results <- as.data.frame(lapply(pval_list, FUN = function(x_pval){
+    colSums(is.na(x_pval[,"adjusted",]))
+  }))
+  print(conf,"\n")
+  print(summary(nNAs_results))
+  
+  if(diff != 1) {
+    and_adj_temp <- p_raw_temp<- 
+      data.frame(
+        method = rep(meths, each = n_stra),
+        genestra = rep(names(gene_index), times = length(meths)), 
+        diff = rep(diff, length(meths)*n_stra), 
+        n_sample = rep(n_cas+n_ctr, length(meths)*n_stra),
+        n_cell = rep(n_cell, length(meths)*n_stra),
+        neq_n_cell = rep(neq_n_cell, length(meths)*n_stra),
+        values = rep(0, length(meths)*n_stra),
+        sd = rep(0, length(meths)*n_stra),
+        se = rep(0, length(meths)*n_stra)
+      )
+    fdp_adj_temp <- data.frame(
+        method = meths,
+        diff = rep(diff, length(meths)), 
+        n_sample = rep(n_cas+n_ctr, length(meths)),
+        n_cell = rep(n_cell, length(meths)),
+        neq_n_cell = rep(neq_n_cell, length(meths)),
+        values = rep(0, length(meths)),
+        sd = rep(0, length(meths)),
+        se = rep(0, length(meths))
+      )
+    
+    p_raw_temp$values <- unlist(lapply(pval_list, function(x_pval)
+      sapply(1:n_stra, function(stra){
+        flag = gene_index[[stra]]
+        mean(colMeans(x_pval[flag, "raw", ] <= thre_raw, na.rm = T))
+             # discovery% in each bootstrap######################
+      })))
+    p_raw_temp$sd <- unlist(lapply(pval_list, function(x_pval)
+      sapply(1:n_stra, function(stra){
+        flag = gene_index[[stra]]
+        sd(colMeans(x_pval[flag, "raw", ] <= thre_raw, na.rm = T))
+      })))
+    p_raw_temp$se <- p_raw_temp$sd/sqrt(boot)
+    p_raw <- bind_rows(p_raw, p_raw_temp)
+    
+    and_adj_temp$values <- unlist(lapply(pval_list, function(x_pval)
+      sapply(1:n_stra, function(stra){
+        flag = gene_index[[stra]]
+        mean(colSums(x_pval[flag, "adjusted", ] <= thre_adj, na.rm = T))
+             # discoveries in each bootstrap##########################
+      })))
+    and_adj_temp$sd <- unlist(lapply(pval_list, function(x_pval)
+      sapply(1:n_stra, function(stra){
+        flag = gene_index[[stra]]
+        sd(colSums(x_pval[flag, "adjusted", ] <= thre_adj, na.rm = T))
+             # discoveries in each bootstrap##########################
+      })))
+    and_adj_temp$se <- and_adj_temp$sd/sqrt(boot)
+    and_adj <- bind_rows(and_adj, and_adj_temp)
+    
+    fdp_adj_temp$values <- unlist(lapply(pval_list, function(x_pval){
+      flag = gene_index[["EE_index"]]
+      fdp <- colSums(x_pval[flag, "adjusted", ] <= thre_adj, na.rm = TRUE) /
+        colSums(x_pval[ , "adjusted", ] <= thre_adj, na.rm = TRUE)
+      fdp[is.na(fdp)] <- 0 # 0/0 case
+      mean(fdp, na.rm = TRUE) 
+    }))
+    fdp_adj_temp$sd <- unlist(lapply(pval_list, function(x_pval){
+      flag = gene_index[["EE_index"]]
+      fdp <- colSums(x_pval[flag, "adjusted", ] <= thre_adj, na.rm = TRUE) /
+        colSums(x_pval[ , "adjusted", ] <= thre_adj, na.rm = TRUE)
+      fdp[is.na(fdp)] <- 0
+      sd(fdp)
+    }))
+    fdp_adj_temp$se <- fdp_adj_temp$sd/sqrt(boot)
+    fdp_adj <- bind_rows(fdp_adj, fdp_adj_temp)
+  } else { #diff == 1, type 1 and fdr case
+    # temppval <- pval_list[["IDEAS"]]
+    # pbinom(5, size = 99999, prob = 0.00001,lower.tail = FALSE)
+    # #[1] 0.0005940929
+    # # nperm = 99999 is enough for those whose P > 0.00005
+    # table(colSums(temppval[,"raw", ] <= 0.00005, na.rm=TRUE))
+    # #     0   1   2   3 
+    # #   684 254  55   7
+    # # nperm = 99999 is enough for almost all cases
+    FDR_results <- 
+      data.frame(
+        method = meths,
+        n_sample = rep(n_cas+n_ctr, length(meths)),
+        n_cell = rep(n_cell, length(meths)),
+        neq_n_cell = rep(neq_n_cell, length(meths)),
+        p_raw_mean = rep(NA_real_, length(meths)),
+        p_raw_sd = rep(NA_real_, length(meths)),
+        p_raw = rep(NA_character_, length(meths)),
+        fdr = rep(NA_character_, length(meths)),
+        ANFD_mean = rep(NA_real_, length(meths)),
+        ANFD_sd = rep(NA_real_, length(meths)),
+        ANFD = rep(NA_character_, length(meths))
+      )
+    FDR_results$fdr <- pval_list %>% 
+      lapply(X = ., FUN = function(x_pval)
+        sum(colSums(x_pval[, "adjusted", ] <= thre_adj, na.rm = TRUE) >0)) %>%
+            #at least one discovery#####################################
+      unlist(.) %>%
+      summarize_binconf(x = ., repl = boot)
+    
+    FDR_results$ANFD_mean <- pval_list %>% 
+      lapply(X = ., FUN = function(x_pval)
+        mean(colSums(x_pval[, "adjusted", ] <= thre_adj, na.rm = TRUE))) %>%
+             # discoveries in each bootstrap#########################
+      unlist(.) 
+    FDR_results$ANFD_sd <- pval_list %>% 
+      lapply(X = ., FUN = function(x_pval)
+        sd(colSums(x_pval[, "adjusted", ] <= thre_adj, na.rm = TRUE))) %>%
+             # discoveries in each bootstrap#########################
+      unlist(.) 
+    FDR_results$ANFD <- str_glue("{round(FDR_results$ANFD_mean,1)} ({round(FDR_results$ANFD_mean+1.96*FDR_results$ANFD_sd/sqrt(boot),1)}, {round(FDR_results$ANFD_mean-1.96*FDR_results$ANFD_sd/sqrt(boot),1)})")
+    
+    FDR_results$p_raw_mean <- pval_list %>%
+      lapply(X = ., FUN = function(x_pval)
+        mean(colMeans(x_pval[, "raw", ] <= thre_raw, na.rm = TRUE))) %>%
+      unlist(.)
+    FDR_results$p_raw_sd <- pval_list %>%
+      lapply(X = ., FUN = function(x_pval)
+        sd(colMeans(x_pval[, "raw", ] <= thre_raw, na.rm = TRUE))) %>%
+      unlist(.)
+    FDR_results$p_raw <- str_glue("{round(FDR_results$p_raw_mean*100,2)} ({round((FDR_results$p_raw_mean+1.96*FDR_results$p_raw_sd/sqrt(boot))*100,2)}, {round((FDR_results$p_raw_mean-1.96*FDR_results$p_raw_sd/sqrt(boot))*100,2)})")
+    
+    # it seems DEseq2 have a severe problem of inflated fdr using simulated data
+    temppval <- pval_list[["DESeq2"]]
+    genes_identified <- apply(temppval[,"adjusted",]<= thre_adj, MARGIN = 2, 
+                              FUN = which, simplify = FALSE)
+    print("number of false positive findings in first 20 runs using DEseq:")
+    print(colSums(temppval[,"adjusted",1:20] <= thre_adj, na.rm=T))
+    print("false positive genes in first 10 runs using DEseq:")
+    print(table(unlist(genes_identified[1:20])))
+    print("most often found genes:")
+    temp <- table(unlist(genes_identified))
+    print(temp[which.max(temp)]) # not very often
+  }
+}
+
+
+```
+
+
+## Figures
+
+- Rename the factor levels for illustration
+
+```{r results rename}
+meths = c("DiSC", "IDEAS", "DESeq2") 
+# from "Parameters Estimated from Real Data" part
+diff_ngene <- round(ngene*signal_density) 
+diff_ngene
+p_raw <- p_raw %>% 
+  mutate(genestra = str_c("Difference in ",
+                          str_replace(
+                            str_remove(genestra, "_index$"), 
+                          "_", "+"))) %>%
+  mutate(genestra = fct_relevel(genestra, "Difference in mean+var", after = Inf))%>%
+  mutate(method = fct_relevel(method, meths))
+and_adj <- and_adj %>% 
+  mutate(genestra = str_c("Difference in ",
+                          str_replace(
+                            str_remove(genestra, "_index$"), 
+                          "_", "+"))) %>%
+  mutate(genestra = fct_relevel(genestra, "Difference in mean+var", after = Inf))%>%
+  mutate(method = fct_relevel(method, meths))
+fdp_adj <- fdp_adj %>%
+  mutate(method = fct_relevel(method, meths))
+```
+
+-  Scenario 1: Different effect sizes
+
+```{r results figures1, fig.width=9, fig.height=3.5}
+ebw <- 0.05 #error bar width
+DE1.1 <- p_raw %>% 
+  filter(n_cell  == 375, n_sample == 24, 
+         diff != 1, genestra != "Difference in EE") %>%
+  mutate(values = values*100, sd = sd*100, se = se*100) %>%
+  ggplot(aes(x=diff, y=values, color=method)) + 
+  facet_wrap(vars(genestra), ncol=3)+
+  geom_point() + geom_line()+ 
+  geom_errorbar(aes(ymin=values-1.96*se, ymax=values+1.96*se), width=ebw)+
+  scale_color_brewer(palette = "Set1") +
+  ylab("Positive findings (%), unadjusted") + xlab("Effect sizes")+ ylim(0,100)+
+  theme_bw() + 
+  theme(legend.position="bottom")
+EE1.1 <- p_raw %>% 
+  filter(n_cell  == 375, n_sample == 24, 
+         diff != 1, genestra == "Difference in EE") %>%
+  mutate(values = values*100, sd = sd*100, se = se*100) %>%
+  ggplot(aes(x=diff, y=values, color=method)) + 
+  geom_point() + geom_line()+
+  geom_errorbar(aes(ymin=values-1.96*se, ymax=values+1.96*se), width=ebw)+
+  geom_hline(yintercept=thre_raw*100, linetype="dashed", color = "firebrick4")+
+  scale_color_brewer(palette = "Set1") +
+  ylab("Positive findings in EE genes (%)") + xlab("Effect sizes")+
+  scale_y_continuous(breaks = c(0,2,4,6,8), limits = c(0,10))+
+  theme_bw() + 
+  theme(legend.position="bottom")
+
+DE1.2 <- and_adj %>% 
+  filter(n_cell  == 375, n_sample == 24,
+         diff != 1, genestra != "Difference in EE") %>%
+  mutate(values = values/diff_ngene*100, 
+         sd = sd/diff_ngene*100, se = se/diff_ngene*100) %>%
+  ggplot(aes(x=diff, y=values, color=method))  + 
+  facet_wrap(vars(genestra), nrow = 1, ncol=3)+
+  geom_point() + geom_line()+
+  geom_errorbar(aes(ymin=values-1.96*se, ymax=values+1.96*se), width=ebw)+
+  scale_color_brewer(palette = "Set1") +
+  ylab("Positive findings (%), adjusted") + xlab("Effect sizes")+ylim(0,100)+
+  theme_bw() + 
+  theme(legend.position="bottom")
+
+EE1.2 <- fdp_adj %>% 
+  filter(n_cell  == 375, n_sample == 24, diff != 1) %>%
+  group_by(diff, n_sample, n_cell, neq_n_cell, method) %>%
+  mutate(values = values*100, sd= sd*100, se = se*100) %>%
+  ggplot(aes(x=diff, y=values, color=method))  + 
+  geom_point() + geom_line()+
+  geom_errorbar(aes(ymin=values-1.96*se, ymax=values+1.96*se), width=ebw)+
+  geom_hline(yintercept=thre_adj*100, linetype="dashed", color = "firebrick4")+
+  scale_color_brewer(palette = "Set1") +
+  ylab("False discovery proportion (%)") + xlab("Effect sizes")+ylim(0,65)+
+  theme_bw() + 
+  theme(legend.position="bottom")
+
+figure1.1 <- ggarrange(EE1.1, DE1.1,labels = c("(a)", "(b)"), widths = c(1,3),
+                       legend = "bottom", common.legend = TRUE,
+                       font.label = list(size = 12, color = "black", 
+                                         face = "plain", family = NULL))
+figure1.1
+ggsave(filename = "results/para_effectsize_raw.jpeg", figure1.1, 
+       width = 9, height = 3.5)
+ggsave(filename = "results/para_effectsize_raw.pdf" , figure1.1,
+       width = 9, height = 3.5)
+figure1.2 <- ggarrange(EE1.2, DE1.2,labels = c("(a)", "(b)"), widths = c(1,3),
+                       legend = "bottom", common.legend = TRUE,
+                       font.label = list(size = 12, color = "black", 
+                                         face = "plain", family = NULL))
+figure1.2
+  
+ggsave(filename = "results/para_effectsize_fdr.jpeg", figure1.2, 
+       width = 9, height = 3.5)
+ggsave(filename = "results/para_effectsize_fdr.pdf" , figure1.2,
+       width = 9, height = 3.5)
+```
+
+-  Scenario 2: Different cell numbers
+
+```{r results figures2, fig.width=9, fig.height=3.5}
+ebw <- p_raw %>% 
+  filter(diff != 1) %>% 
+  summarise(ebw = 0.05*(max(n_cell) - min(n_cell)) / (max(diff) - min(diff)))%>%
+  pull(ebw)
+  #error bar width
+NCELL <- p_raw %>% 
+  filter(diff != 1) %>% 
+  distinct(n_cell) %>% 
+  pull(n_cell) %>% 
+  sort()
+DE2.1 <- p_raw %>% 
+  filter(diff  == 1.3, n_sample == 24,
+         diff != 1, genestra != "Difference in EE") %>%
+  mutate(values = values*100, sd = sd*100, se = se*100) %>%
+  ggplot(aes(x=n_cell, y=values, color=method)) + 
+  facet_wrap(vars(genestra), ncol=3)+
+  geom_point() + geom_line()+ 
+  geom_errorbar(aes(ymin=values-1.96*se, ymax=values+1.96*se), width=ebw)+
+  scale_color_brewer(palette = "Set1") +
+  ylab("Positive findings (%), unadjusted") + xlab("Cell number")+
+  ylim(0,100)+scale_x_continuous(breaks = NCELL)+
+  theme_bw() + 
+  theme(legend.position="bottom")
+EE2.1 <- p_raw %>% 
+  filter(diff  == 1.3, n_sample == 24,
+         diff != 1, genestra == "Difference in EE") %>%
+  mutate(values = values*100, sd = sd*100, se = se*100) %>%
+  ggplot(aes(x=n_cell, y=values, color=method)) + 
+  geom_point() + geom_line()+
+  geom_errorbar(aes(ymin=values-1.96*se, ymax=values+1.96*se), width=ebw)+
+  geom_hline(yintercept=thre_raw*100, linetype="dashed", color = "firebrick4")+
+  scale_color_brewer(palette = "Set1") +
+  ylab("Positive findings in EE genes (%)") + xlab("Cell number")+
+  scale_y_continuous(breaks = c(0,2,4,6,8), limits = c(0,10))+
+  scale_x_continuous(breaks = NCELL)+
+  theme_bw() + 
+  theme(legend.position="bottom")
+DE2.2 <- and_adj %>% 
+  filter(diff  == 1.3, n_sample == 24,
+         diff != 1, genestra != "Difference in EE") %>%
+  mutate(values = values/diff_ngene*100, 
+         sd = sd/diff_ngene*100, se = se/diff_ngene*100) %>%
+  ggplot(aes(x=n_cell, y=values, color=method))  + 
+  facet_wrap(vars(genestra), nrow = 1, ncol=3)+
+  geom_point() + geom_line()+
+  geom_errorbar(aes(ymin=values-1.96*se, ymax=values+1.96*se), width=ebw)+
+  scale_color_brewer(palette = "Set1") +
+  ylab("Positive findings (%), adjusted") + xlab("Cell number")+
+  ylim(0,100)+scale_x_continuous(breaks = NCELL)+
+  theme_bw() + 
+  theme(legend.position="bottom")
+EE2.2 <- fdp_adj %>% 
+  filter(diff == 1.3, n_sample == 24, diff != 1) %>%
+  group_by(diff, n_sample, n_cell, neq_n_cell, method) %>%
+  mutate(values = values*100, sd= sd*100, se = se*100) %>%
+  ggplot(aes(x=n_cell, y=values, color=method))  + 
+  geom_point() + geom_line()+
+  geom_errorbar(aes(ymin=values-1.96*se, ymax=values+1.96*se), width=ebw)+
+  geom_hline(yintercept=thre_adj*100, linetype="dashed", color = "firebrick4")+
+  scale_color_brewer(palette = "Set1") +
+  ylab("False discovery proportion (%)") + xlab("Cell number")+
+  ylim(0,65)+scale_x_continuous(breaks = NCELL)+
+  theme_bw() + 
+  theme(legend.position="bottom")
+
+
+figure2.1 <- ggarrange(EE2.1, DE2.1,labels = c("(a)", "(b)"), widths = c(1,3),
+                       legend = "bottom", common.legend = TRUE,
+                       font.label = list(size = 12, color = "black", 
+                                         face = "plain", family = NULL))
+figure2.1
+ggsave(filename = "results/para_cellnum_raw.jpeg", figure2.1, 
+       width = 9, height = 3.5)
+ggsave(filename = "results/para_cellnum_raw.pdf" , figure2.1,
+       width = 9, height = 3.5)
+
+figure2.2 <- ggarrange(EE2.2, DE2.2,labels = c("(a)", "(b)"), widths = c(1,3),
+                       legend = "bottom", common.legend = TRUE,
+                       font.label = list(size = 12, color = "black", 
+                                         face = "plain", family = NULL))
+figure2.2
+ggsave(filename = "results/para_cellnum_fdr.jpeg", figure2.2, 
+       width = 9, height = 3.5)
+ggsave(filename = "results/para_cellnum_fdr.pdf" , figure2.2,
+       width = 9, height = 3.5)
+```
+
+-  Scenario 3: different sample sizes
+
+```{r results figures3, fig.width=9, fig.height=3.5}
+ebw <- p_raw %>% 
+  filter(diff != 1) %>% 
+  summarise(ebw = 0.05*(max(n_sample) - min(n_sample)) / (max(diff) - min(diff)))%>%
+  pull(ebw)
+  #error bar width
+NSAMPLE <- p_raw %>% 
+  filter(diff != 1) %>% 
+  distinct(n_sample) %>% 
+  pull(n_sample) %>% 
+  sort()
+DE3.1 <- p_raw %>% 
+  filter(diff  == 1.3, n_cell == 375,
+         diff != 1, genestra != "Difference in EE") %>%
+  mutate(values = values*100, sd = sd*100, se = se*100) %>%
+  ggplot(aes(x=n_sample, y=values, color=method)) + 
+  facet_wrap(vars(genestra), ncol=3)+
+  geom_point() + geom_line()+ 
+  geom_errorbar(aes(ymin=values-1.96*se, ymax=values+1.96*se), width=ebw)+
+  scale_color_brewer(palette = "Set1") +
+  ylab("Positive findings (%), unadjusted") + xlab("Sample sizes")+
+  ylim(0,100)+scale_x_continuous(breaks = NSAMPLE)+
+  theme_bw() + 
+  theme(legend.position="bottom")
+EE3.1 <- p_raw %>% 
+  filter(diff  == 1.3, n_cell == 375,
+         diff != 1, genestra == "Difference in EE") %>%
+  mutate(values = values*100, sd = sd*100, se = se*100) %>%
+  ggplot(aes(x=n_sample, y=values, color=method)) + 
+  geom_point() + geom_line()+
+  geom_errorbar(aes(ymin=values-1.96*se, ymax=values+1.96*se), width=ebw)+
+  geom_hline(yintercept=thre_raw*100, linetype="dashed", color = "firebrick4")+
+  scale_color_brewer(palette = "Set1") +
+  ylab("Positive findings in EE genes (%)") + xlab("Sample sizes")+
+  scale_y_continuous(breaks = c(0,2,4,6,8), limits = c(0,10))+
+  scale_x_continuous(breaks = NSAMPLE)+
+  theme_bw() + 
+  theme(legend.position="bottom")
+DE3.2 <- and_adj %>% 
+  filter(diff  == 1.3, n_cell == 375,
+         diff != 1, genestra != "Difference in EE") %>%
+  mutate(values = values/diff_ngene*100, 
+         sd = sd/diff_ngene*100, se = se/diff_ngene*100) %>%
+  ggplot(aes(x=n_sample, y=values, color=method))  + 
+  facet_wrap(vars(genestra), nrow = 1, ncol=3)+
+  geom_point() + geom_line()+
+  geom_errorbar(aes(ymin=values-1.96*se, ymax=values+1.96*se), width=ebw)+
+  scale_color_brewer(palette = "Set1") +
+  ylab("Positive findings (%), adjusted") + xlab("Sample sizes")+
+  ylim(0,100)+scale_x_continuous(breaks = NSAMPLE)+
+  theme_bw() + 
+  theme(legend.position="bottom")
+EE3.2 <- fdp_adj %>% 
+  filter(diff == 1.3, n_cell == 375, diff != 1) %>%
+  group_by(diff, n_sample, n_cell, neq_n_cell, method) %>%
+  mutate(values = values*100, sd= sd*100, se = se*100) %>%
+  ggplot(aes(x=n_sample, y=values, color=method))  + 
+  geom_point() + geom_line()+
+  geom_errorbar(aes(ymin=values-1.96*se, ymax=values+1.96*se), width=ebw)+
+  geom_hline(yintercept=thre_adj*100, linetype="dashed", color = "firebrick4")+
+  scale_color_brewer(palette = "Set1") +
+  ylab("False discovery proportion (%)") + xlab("Sample sizes")+
+  ylim(0,65)+scale_x_continuous(breaks = NSAMPLE)+
+  theme_bw() + 
+  theme(legend.position="bottom")
+
+
+
+figure3.1 <- ggarrange(EE3.1, DE3.1,labels = c("(a)", "(b)"), widths = c(1,3),
+                       legend = "bottom", common.legend = TRUE,
+                       font.label = list(size = 12, color = "black", 
+                                         face = "plain", family = NULL))
+figure3.1
+ggsave(filename = "results/para_samplesize_raw.jpeg", figure3.1, 
+       width = 9, height = 3.5)
+ggsave(filename = "results/para_samplesize_raw.pdf" , figure3.1,
+       width = 9, height = 3.5)
+
+figure3.2 <- ggarrange(EE3.2, DE3.2,labels = c("(a)", "(b)"), widths = c(1,3),
+                       legend = "bottom", common.legend = TRUE,
+                       font.label = list(size = 12, color = "black", 
+                                         face = "plain", family = NULL))
+figure3.2
+ggsave(filename = "results/para_samplesize_fdr.jpeg", figure3.2, 
+       width = 9, height = 3.5)
+ggsave(filename = "results/para_samplesize_fdr.pdf" , figure3.2,
+       width = 9, height = 3.5)
+```
+
+-  Scenario 4: type I error and FDR
+
+```{r results figures4}
+tbl.temp <- FDR_results %>%
+  select(method, p_raw, fdr, ANFD) %>%
+  rename("Type I error rate (%)" = p_raw) %>%
+  rename("False discovery proportions (%)" = fdr) %>%
+  rename("Average number of false positive fundings" = ANFD) %>%
+  kbl() %>%
+  kable_classic(full_width = F, html_font = "Cambria")
+tbl.temp
+save_kable(tbl.temp, file = "results/para_null_fdr.jpeg", 
+           density = 1000, zoom = 2.5)
+```
+
+## Session Info
+
+```{r info}
+sessionInfo()
+```
+
+## References
+
+-    Zhang, M., et al. IDEAS: individual level differential expression analysis for single-cell RNA-seq data. Genome Biol 23, 33 (2022). https://doi.org/10.1186/s13059-022-02605-1.
+-    Velmeshev, D., et al. Single-cell genomics identifies cell type–specific molecular changes in autism. Science 364.6441 (2019): 685-689.
+-    Eraslan, G., et al. Single-cell RNA-seq denoising using a deep count autoencoder. Nature communications 10.1 (2019): 1-14.
+
