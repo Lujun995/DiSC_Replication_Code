@@ -1,6 +1,6 @@
 # DiSC_Replication_Code
 
-This folder contains scripts, data, and R markdown files that can be used to reproduce the results presented in our paper. In the main folder, you will find four markdown files and their corresponding outputs. Additionally, there are several subfolders used to organize data, source code, scripts, parameters, R markdown files, and more.
+This folder contains scripts, data, and R markdown files that can be used to reproduce the results presented in our paper. In the main directory, you will find four markdown files along with their corresponding HTML outputs: **Real_data_simulation.html**, **Parametric_simulation.html**, **Real_data_analysis.html**, and **Supplementary_information.html**. We recommend starting a code review with the four R markdown outputs in HTML format. Additionally, there are several subfolders for organizing data, source code, scripts, parameters, intermediate results, and more.
 
 ## Simulations Based on Real-World Data
 
