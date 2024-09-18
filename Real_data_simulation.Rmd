@@ -1,7 +1,7 @@
 ---
 title: "Simulation Based on Real-World Data"
 author: "Lujun Zhang and Jun Chen"
-date: "2023-09-21"
+date: "2024-08-14"
 output:
   html_document:
     number_sections: true
@@ -10,7 +10,7 @@ output:
 # Setup
 
 -  Required packages: 
-    +  `doParallel`, `foreach`, `doRNG`, `Matrix`, `matrixStats`, `GUniFrac`, `tidyverse`, `Hmisc`, `knitr`, `kableExtra` from CRAN; 
+    +  `doParallel`, `foreach`, `doRNG`, `Matrix`, `matrixStats`, `tidyverse`, `Hmisc`, `knitr`, `kableExtra` from CRAN; 
     +  `DESeq2` from bioconductor; 
     +  `ideas` from https://github.com/Sun-lab/ideas
 
@@ -27,13 +27,12 @@ library(Matrix)
 
 The simulations are based on cell type "L2/3" found in the region of the prefrontal cortex (PFC) from an autism study conducted by Velmeshev, et al. (2019). The data have been preprocessed in accordance with the procedures outlined in the IDEAS paper and were directly obtained from the link [https://github.com/Sun-lab/ideas_pipeline/tree/main/Autism/data/ct_mtx](https://github.com/Sun-lab/ideas_pipeline/tree/main/Autism/data/ct_mtx) (Zhang et al., 2022).
 
-In the following code chunk, we will read in the `count_matrix`, which comprises count data from single-cell RNA sequencing, as well as metadata indicating cell assignments to specific individuals and diagnoses for autism spectrum disorder (ASD) and healthy controls. We will also perform sparsity filtering, excluding genes appearing in fewer than 20% of cells with a defined threshold of `SPARSITY_THRESHOLD` set at 0.8. For the purpose of simulation, we will discard cells with insufficient sequencing depth, defined by the `DISCARDING` threshold set at 0.10 (representing the bottom 10%, equivalent to a sequencing depth of approximately 5000).
+In the following code chunk, we will read in the `count_matrix`, which comprises count data from single-cell RNA sequencing, as well as metadata indicating cell assignments to specific individuals and diagnoses for autism spectrum disorder (ASD) and healthy controls. We will also perform sparsity filtering, excluding genes appearing in fewer than 20% of cells with a defined threshold of `sparsity_threshold` set at 0.8. We will discard cells with insufficient sequencing depth, defined by the `thre_quant_per_cell` threshold set at 0.05 (representing the bottom 5%, equivalent to a sequencing depth of approximately 4100), and cells overly deeply sequenced, defined by the `max_quant_per_cell` threshold set at 0.99 (representing the top 1%, equivalent to a sequencing depth of approximately 41000).
 
-The subsequent code chunk will save the workspace image as "setup0702.RData" in the "real_data_sim/" folder. This image includes the processed sequencing data, metadata, and functions from the "source_code/DiSC.R" script.
+The subsequent code chunk will save required datasets as "setup0702.RData" in the "real_data_sim/" folder. This image includes the processed sequencing data, metadata, and functions from the "source_code/DiSC.R" script.
 
 
 ```{r input}
-rm(list=ls())
 ###########################################################
 #remember to copy these after modifying the count matrix
 # ngene = nrow(count_matrix)
@@ -41,13 +40,11 @@ rm(list=ls())
 # read_depth <- colSums(count_matrix)
 # cat("ngene: ", ngene, "ncell: ", ncell, "read_depth[1:10]: ", read_depth[1:10], "\n")
 ###########################################################
-source("source_code/DiSC.R")
-SPARSITY_THRESHOLD = 0.8 #or NULL. Keep genes with sparsity < SPARSITY_THRESHOLD
-DISCARDING = 0.1 # or NULL. Discard cells with read depths < the bottom DISCARDING 
+sparsity_threshold = 0.8 #or NULL. Keep genes with sparsity < SPARSITY_THRESHOLD
+thre_quant_per_cell = 0.05 # 5% quantile. Or 0 to keep all the cells
+max_quant_per_cell  = 0.99 # 99% quantile. Or 1 to keep all the cells
+boot = 1000
 
-ctypes = c("L2_3", "L4", "Microglia", "Endothelial", "IN-SV2C", "AST-PP", 
-           "IN-VIP", "IN-SST", "IN-PV", "AST-FB", "Oligodendrocytes", 
-           "L5_6", "L5_6-CC", "OPC", "Neu-NRGN-II", "Neu-NRGN-I", "Neu-mat")
 fp = "ideas_pipeline-main/Autism/data/"
 
 ctp  = "L2_3"
@@ -61,9 +58,9 @@ if(ngene < ncell)
   warning("the number of genes is smaller than the number of cells, please check if genes are in rows")
 cat("ngene: ", ngene, "ncell: ", ncell, "read_depth[1:10]: ", read_depth[1:10], "\n")
 #### Sparsity filtering
-if(!is.null(SPARSITY_THRESHOLD)){
-  cat("sparsity filtering with threshold ", SPARSITY_THRESHOLD, " :\n")
-  gene2keep = which(rowSums(count_matrix == 0) < SPARSITY_THRESHOLD*ncell)
+if(!is.null(sparsity_threshold)){
+  cat("sparsity filtering with threshold ", sparsity_threshold, " :\n")
+  gene2keep = which(rowSums(count_matrix == 0) < sparsity_threshold*ncell)
   count_matrix = count_matrix[gene2keep,]
   read_depth = colSums(count_matrix)
   ngene = nrow(count_matrix)
@@ -71,12 +68,13 @@ if(!is.null(SPARSITY_THRESHOLD)){
   read_depth <- colSums(count_matrix)
   cat("ngene: ", ngene, "ncell: ", ncell, "read_depth[1:10]: ", read_depth[1:10], "\n")
 }
-#### discard insufficiently sequenced cells (for simulation purpose)
-if(!is.null(DISCARDING)){
-  depth = round(quantile(read_depth, probs = DISCARDING))
-  cat("read depth filtering with threshold", DISCARDING, "\n",
-      "which corresponds to a minimal read depth of", depth, ":\n")
-  count_matrix <- count_matrix[, which(read_depth >= depth)]
+#### discard insufficiently and overly deeply sequenced cells
+if(TRUE){
+  min_count = round(quantile(read_depth, probs = thre_quant_per_cell))
+  max_count = round(quantile(read_depth, probs = max_quant_per_cell))
+  cat(str_glue("read depth filtering with threshold (min = {thre_quant_per_cell}, max = {max_quant_per_cell}),\nwhich corresponds to read depth of (min = {min_count}, max = {max_count})"))
+  count_matrix <- count_matrix[, which(read_depth >= min_count & 
+                                         read_depth <= max_count)]
   ngene = nrow(count_matrix)
   ncell = ncol(count_matrix)
   read_depth <- colSums(count_matrix)
@@ -103,46 +101,92 @@ meta_ind <- meta_cell %>% distinct(individual, .keep_all = TRUE) %>%
   dplyr::rename(RIN = "RNA Integrity Number")
 nindi = nrow(meta_ind)
 
-save.image("real_data_sim/setup0702.RData")
+## more prepossessing
+set.seed(seed = 123456)
+meta_cell = as.data.frame(meta_cell) 
+meta_ind = as.data.frame(meta_ind)
+count_matrix = as.matrix(count_matrix)
+perm.index = sapply(1:boot, simplify = TRUE,
+                    FUN = function(xxxx) 
+                      return(sample(1:nindi)) )
+
+count_matrix_bulk = matrix(NA, nrow = ngene, ncol = nindi)
+rownames(count_matrix_bulk) = rownames(count_matrix)
+colnames(count_matrix_bulk) = meta_ind$individual
+if(sum(meta_cell$cell_id != colnames(count_matrix))==0)
+  for (i_ind in 1:length(meta_ind$individual)) {
+    cur_ind   = meta_ind$individual[i_ind]
+    cur_ind_m = count_matrix[, meta_cell$individual == cur_ind] 
+    count_matrix_bulk[, i_ind] = rowSums(cur_ind_m, na.rm = TRUE)
+  }else
+    error("meta_cell$cell_id and colnames(count_matrix) dont match")
+
+## save required dataset
+save(list = c("meta_cell", "meta_ind", "count_matrix", "perm.index",
+              "count_matrix_bulk"),
+     file = "real_data_sim/setup0814.RData", compress = "xz")
 ```
 
 # Simulation Study (False Discovery Rate and Type I Error)
 
 In the following code chunk, we will generate sbatch shell scripts (.sh) and R scripts (.R) within the "real_data_sim/" directory. These files are designed for execution on a high-performance computing cluster utilizing the Slurm workload manager.
 
-This code segment will permute labels for the variable `diagnosis` (ASD vs. control) and apply different statistical methods to investigate the association between `diagnosis` and single-cell RNA sequencing data. We aim to examine the type I error rates and false discovery rates of these methods. The results will be saved in "real_data_sim/type1_{DATE}.RData."
+This code segment will permute labels for the variable `diagnosis` (ASD vs. control) base on `perm.index` and apply different statistical methods to investigate the association between `diagnosis` and single-cell RNA sequencing data. We aim to examine the type I error rates and false discovery rates of these methods. The results will be saved in "real_data_sim/type1_{METHOD}_{DATE}.RData."
 
 ```{r simulation FDR setup}
+file.copy(from = "source_code/DiSC.R", to = "real_data_sim/DiSC.R",
+          copy.date = TRUE, overwrite  = TRUE)
+
 WORKINGDIRECTORY = "/home/guanwh/zhan7474/mayo/real_data_sim/"
-BOOT = 1000 %>% as.character()
-NCORES = 80 %>% as.character()
-DATE = "0715"
-CLASS = "Type1"
-shell_path <- paste("real_data_sim/", CLASS, "_", DATE, ".sh", sep = "")
-Rscript_path <- paste("real_data_sim/", CLASS, "_", DATE, ".R", sep = "")
+boot
+BOOT = as.character(boot)
+DATE = "0814"
+CLASS = "type1"
 
-read_file("source_code/real_sim_type1.sh") %>% 
-  str_replace_all(pattern = "DATE", DATE) %>%
-  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
-  str_replace_all(pattern = "CLASS", CLASS) %>%
-  str_replace_all(pattern = "NCORES", NCORES) %>%
-  write_file(file = shell_path, append = FALSE)
-read_file("source_code/real_sim_type1.R") %>% 
-  str_replace_all(pattern = "DATE", DATE) %>%
-  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
-  str_replace_all(pattern = "BOOT", BOOT) %>%
-  str_replace_all(pattern = "NCORES", NCORES) %>%
-  write_file(file = Rscript_path, append = FALSE)
+METHOD_S = c("disc", "ideas", "deseq")
+for(METHOD in METHOD_S){
+  MEM = ifelse(METHOD == "disc", 2500*2, 2500) %>% as.character()
+  NCORES = min(80, round(200000/as.numeric(MEM), digits = -1)) %>% as.character()
+  # shell script
+  read_file("source_code/real_sim_type1.sh") %>% 
+    str_replace_all(pattern = "DATE", DATE) %>%
+    str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+    str_replace_all(pattern = "CLASS", CLASS) %>%
+    str_replace_all(pattern = "MEM", MEM) %>%
+    str_replace_all(pattern = "NCORES", NCORES) %>%
+    str_replace_all(pattern = "METHOD", METHOD) %>%
+    write_file(file = str_glue("real_data_sim/{CLASS}_{METHOD}_{DATE}.sh"), 
+               append = FALSE)
+  # R script
+  read_file(str_glue("source_code/real_sim_type1_{METHOD}.R")) %>% 
+    str_replace_all(pattern = "DATE", DATE) %>%
+    str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+    str_replace_all(pattern = "BOOT", BOOT) %>%
+    str_replace_all(pattern = "NCORES", NCORES) %>%
+    str_replace_all(pattern = "CLASS", CLASS) %>%
+    write_file(file = str_glue("real_data_sim/{CLASS}_{METHOD}_{DATE}.R"), 
+               append = FALSE)
+}
 ```
 
--  Shell script (`r shell_path`):
+-  Example shell script (`r str_glue("real_data_sim/{CLASS}_disc_{DATE}.sh")`)
 
-```{bash simulation FDR shell, file = shell_path, eval=FALSE}
+```{bash, file = str_glue("real_data_sim/{CLASS}_disc_{DATE}.sh"), eval = FALSE}
 ```
 
--  R script (`r Rscript_path`):
+-  R script for DiSC (`r str_glue("real_data_sim/{CLASS}_disc_{DATE}.R")`)
 
-```{r simulation FDR Rscript, file = Rscript_path, eval=FALSE}
+```{r, file = str_glue("real_data_sim/{CLASS}_disc_{DATE}.R"), eval = FALSE}
+```
+
+-  R script for IDEAS (`r str_glue("real_data_sim/{CLASS}_ideas_{DATE}.R")`)
+
+```{r, file = str_glue("real_data_sim/{CLASS}_ideas_{DATE}.R"), eval = FALSE}
+```
+
+-  R script for DESeq2 (`r str_glue("real_data_sim/{CLASS}_deseq_{DATE}.R")`)
+
+```{r, file = str_glue("real_data_sim/{CLASS}_deseq_{DATE}.R"), eval = FALSE}
 ```
 
 -  Run the above scripts on a high performance computer.
@@ -152,7 +196,11 @@ read_file("source_code/real_sim_type1.R") %>%
 -  Extracting results
 
 ```{r simulation result description}
-load("real_data_sim/type1_0715.RData")
+METHOD_S = c("DiSC" = "disc", "IDEAS" = "ideas", "DESeq2" = "deseq")
+meths = names(METHOD_S) #displayed names of methods
+DATE
+CLASS
+boot
 
 summarize_binconf <- function(x, repl){
   # calculate the binomial confidence interval with x successes and repl trials
@@ -164,9 +212,19 @@ summarize_binconf <- function(x, repl){
   return(CI_95)
 }
 
-meths = c("DiSC", "IDEAS", "DESeq2")
-pval_list <- list(disc_pval, ideas_pval, deseq_pval) #ordered by meths
-names(pval_list) <- meths
+for(METHOD in METHOD_S){
+  filename <- str_glue("real_data_sim/{CLASS}_{METHOD}_{DATE}.RData")
+  if(!file.exists(filename))
+    next
+  load(filename) # "disc_pval", "ideas_pval", "deseq_pval"
+  cat(str_glue("loaded {filename}"),"\n")
+}
+#create a list of "_pval" in the order of "METHOD_S" 
+eval(parse(text= str_c("assign('pval_list', list(", 
+                       str_c(str_c(METHOD_S, "_pval"), 
+                             collapse = ","), "))"))) 
+names(pval_list) <- names(METHOD_S) # displayed names of METHOD_S
+
 pval_list <- lapply(pval_list, function(x_pval){
   #convert the disc_pval to an array
   # temp <- array(unlist(disc_pval), 
@@ -220,7 +278,7 @@ FDR_results$ANFD_sd <- pval_list %>%
     sd(colSums(x_pval[, "adjusted", ] <= thre_adj, na.rm = TRUE))) %>%
        # discoveries in each bootstrap#########################
   unlist(.) 
-FDR_results$ANFD <- str_glue("{round(FDR_results$ANFD_mean,1)} ({round(FDR_results$ANFD_mean+1.96*FDR_results$ANFD_sd/sqrt(boot),1)}, {round(FDR_results$ANFD_mean-1.96*FDR_results$ANFD_sd/sqrt(boot),1)})")
+FDR_results$ANFD <- str_glue("{round(FDR_results$ANFD_mean,1)} ({round(FDR_results$ANFD_mean-1.96*FDR_results$ANFD_sd/sqrt(boot),1)}, {round(FDR_results$ANFD_mean+1.96*FDR_results$ANFD_sd/sqrt(boot),1)})")
 
 FDR_results$p_raw_mean <- pval_list %>%
   lapply(X = ., FUN = function(x_pval)
@@ -230,7 +288,7 @@ FDR_results$p_raw_sd <- pval_list %>%
   lapply(X = ., FUN = function(x_pval)
     sd(colMeans(x_pval[, "raw", ] <= thre_raw, na.rm = TRUE))) %>%
   unlist(.)
-FDR_results$p_raw <- str_glue("{round(FDR_results$p_raw_mean*100,2)} ({round((FDR_results$p_raw_mean+1.96*FDR_results$p_raw_sd/sqrt(boot))*100,2)}, {round((FDR_results$p_raw_mean-1.96*FDR_results$p_raw_sd/sqrt(boot))*100,2)})")
+FDR_results$p_raw <- str_glue("{round(FDR_results$p_raw_mean*100,2)} ({round((FDR_results$p_raw_mean-1.96*FDR_results$p_raw_sd/sqrt(boot))*100,2)}, {round((FDR_results$p_raw_mean+1.96*FDR_results$p_raw_sd/sqrt(boot))*100,2)})")
 
 # Tables
 tbl.temp <- FDR_results %>%

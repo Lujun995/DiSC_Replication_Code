@@ -32,7 +32,7 @@ knitr::opts_chunk$set(echo = TRUE)
 set.seed(seed = 123456)
 
 # rm(list = ls())
-source("source_code/DiSC.R")
+# source("source_code/DiSC.R")
 ```
 
 # Parametric Simulations: Data Generation
@@ -344,6 +344,15 @@ The following code chunk will generate scripts for high-performance computing, i
 
 
 ```{r parameters conf}
+###########################################################
+# When skipping the previous code chunk, run this code
+if(!exists("est_out")){
+  DATE = "0811" # for version control
+  est_out <- str_glue("setup{DATE}.RData")
+  load(str_glue("para_data_sim/{est_out}"))
+}
+###########################################################
+
 DATE = "0811" # version control
 WORKINGDIRECTORY = "/home/guanwh/zhan7474/mayo/para_data_sim/"
 MEM = 1500 %>% as.character()
@@ -410,159 +419,183 @@ file.copy(from = "source_code/DiSC.R", to = "para_data_sim/DiSC.R",
 #           to = str_glue("para_data_sim/exam_sim_data_resume_0805.R"),
 #           copy.date = TRUE, overwrite  = TRUE)
 
-# category 1: sample size in [0, 12.1)
-MEM = 2500 %>% as.character()
-NCORE = min(80, round(200000/as.numeric(MEM), digits = -1)) %>% as.character()
-NLIM_1 = 0 %>% as.character()
-NLIM_2 = 12.1 %>% as.character()
-CAT = 1 %>% as.character()
-read_file("source_code/exam_sim_data.sh") %>% 
-  str_replace_all(pattern = "DATE", DATE) %>%
-  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
-  str_replace_all(pattern = "NCORE", NCORE) %>%
-  str_replace_all(pattern = "MEM", MEM) %>%
-  str_replace_all(pattern = "CAT", CAT) %>%
-  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.sh"), 
-             append = FALSE)
-# WORKINGDIRECTORY, NCORE, NLIM_1, NLIM_2, 
-# PARA_OUT, SIMU_D, CAT
-read_file("source_code/exam_sim_data.R") %>% # no DATE but SIMU_D!!!
-  str_replace_all(pattern = "SIMU_D", SIMU_D) %>%
-  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
-  str_replace_all(pattern = "NCORE", NCORE) %>%
-  str_replace_all(pattern = "NLIM_1", NLIM_1) %>%
-  str_replace_all(pattern = "NLIM_2", NLIM_2) %>%
-  str_replace_all(pattern = "PARA_OUT", PARA_OUT) %>%
-  str_replace_all(pattern = "CAT", CAT) %>%
-  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.R"), 
-             append = FALSE)
+METHOD_S = c("disc", "deseq", "ideas")
 
-# category 2: sample size in [12.1, 20.1)
-MEM = 4000 %>% as.character()
-NCORE = min(80, round(200000/as.numeric(MEM), digits = -1)) %>% as.character()
-NLIM_1 = 12.1 %>% as.character()
-NLIM_2 = 20.1 %>% as.character()
-CAT = 2 %>% as.character()
-read_file("source_code/exam_sim_data.sh") %>% 
-  str_replace_all(pattern = "DATE", DATE) %>%
-  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
-  str_replace_all(pattern = "NCORE", NCORE) %>%
-  str_replace_all(pattern = "MEM", MEM) %>%
-  str_replace_all(pattern = "CAT", CAT) %>%
-  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.sh"), 
-             append = FALSE)
-# WORKINGDIRECTORY, NCORE, NLIM_1, NLIM_2, 
-# PARA_OUT, SIMU_D, CAT
-read_file("source_code/exam_sim_data.R") %>% # no DATE but SIMU_D!!!
-  str_replace_all(pattern = "SIMU_D", SIMU_D) %>%
-  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
-  str_replace_all(pattern = "NCORE", NCORE) %>%
-  str_replace_all(pattern = "NLIM_1", NLIM_1) %>%
-  str_replace_all(pattern = "NLIM_2", NLIM_2) %>%
-  str_replace_all(pattern = "PARA_OUT", PARA_OUT) %>%
-  str_replace_all(pattern = "CAT", CAT) %>%
-  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.R"), 
-             append = FALSE)
+for(METHOD in METHOD_S){
+  # category 1: sample size in [0, 12.1)
+  MEM = ifelse(METHOD == "disc", 2500*4, 2500) %>% as.character()
+  NCORE = max(5, min(80, round(200000/as.numeric(MEM), digits = -1))) %>% as.character()
+  NLIM_1 = 0 %>% as.character()
+  NLIM_2 = 12.1 %>% as.character()
+  CAT = 1 %>% as.character()
+  read_file("source_code/exam_sim_data.sh") %>% 
+    str_replace_all(pattern = "DATE", DATE) %>%
+    str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+    str_replace_all(pattern = "NCORE", NCORE) %>%
+    str_replace_all(pattern = "MEM", MEM) %>%
+    str_replace_all(pattern = "CAT", CAT) %>%
+    str_replace_all(pattern = "METHOD", METHOD) %>%
+    write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{METHOD}_{DATE}.sh"), 
+               append = FALSE)
+  # WORKINGDIRECTORY, NCORE, NLIM_1, NLIM_2, 
+  # PARA_OUT, SIMU_D, CAT
+  read_file(str_glue("source_code/exam_sim_data_{METHOD}.R")) %>% # no DATE but SIMU_D!!!
+    str_replace_all(pattern = "SIMU_D", SIMU_D) %>%
+    str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+    str_replace_all(pattern = "NCORE", NCORE) %>%
+    str_replace_all(pattern = "NLIM_1", NLIM_1) %>%
+    str_replace_all(pattern = "NLIM_2", NLIM_2) %>%
+    str_replace_all(pattern = "PARA_OUT", PARA_OUT) %>%
+    str_replace_all(pattern = "CAT", CAT) %>%
+    # no METHOD as the script should already have employed "METHOD"
+    write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{METHOD}_{DATE}.R"), 
+               append = FALSE)
+  
+  # category 2: sample size in [12.1, 20.1)
+  MEM = ifelse(METHOD == "disc", 4000*4, 4000) %>% as.character()
+  NCORE = max(5, min(80, round(200000/as.numeric(MEM), digits = -1))) %>% as.character()
+  NLIM_1 = 12.1 %>% as.character()
+  NLIM_2 = 20.1 %>% as.character()
+  CAT = 2 %>% as.character()
+  read_file("source_code/exam_sim_data.sh") %>% 
+    str_replace_all(pattern = "DATE", DATE) %>%
+    str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+    str_replace_all(pattern = "NCORE", NCORE) %>%
+    str_replace_all(pattern = "MEM", MEM) %>%
+    str_replace_all(pattern = "CAT", CAT) %>%
+    str_replace_all(pattern = "METHOD", METHOD) %>%
+    write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{METHOD}_{DATE}.sh"), 
+               append = FALSE)
+  # WORKINGDIRECTORY, NCORE, NLIM_1, NLIM_2, 
+  # PARA_OUT, SIMU_D, CAT
+  read_file(str_glue("source_code/exam_sim_data_{METHOD}.R")) %>% # no DATE but SIMU_D!!!
+    str_replace_all(pattern = "SIMU_D", SIMU_D) %>%
+    str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+    str_replace_all(pattern = "NCORE", NCORE) %>%
+    str_replace_all(pattern = "NLIM_1", NLIM_1) %>%
+    str_replace_all(pattern = "NLIM_2", NLIM_2) %>%
+    str_replace_all(pattern = "PARA_OUT", PARA_OUT) %>%
+    str_replace_all(pattern = "CAT", CAT) %>%
+    # no METHOD as the script should already have employed "METHOD"
+    write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{METHOD}_{DATE}.R"), 
+               append = FALSE)
+  
+  # category 3: sample size in [20.1, 35.1)
+  MEM = ifelse(METHOD == "disc", 7000*4, 7000) %>% as.character()
+  NCORE = max(5, min(80, round(200000/as.numeric(MEM), digits = -1))) %>% as.character()
+  NLIM_1 = 20.1 %>% as.character()
+  NLIM_2 = 35.1 %>% as.character()
+  CAT = 3 %>% as.character()
+  read_file("source_code/exam_sim_data.sh") %>% 
+    str_replace_all(pattern = "DATE", DATE) %>%
+    str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+    str_replace_all(pattern = "NCORE", NCORE) %>%
+    str_replace_all(pattern = "MEM", MEM) %>%
+    str_replace_all(pattern = "CAT", CAT) %>%
+    str_replace_all(pattern = "METHOD", METHOD) %>%
+    write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{METHOD}_{DATE}.sh"), 
+               append = FALSE)
+  # WORKINGDIRECTORY, NCORE, NLIM_1, NLIM_2, 
+  # PARA_OUT, SIMU_D, CAT
+  read_file(str_glue("source_code/exam_sim_data_{METHOD}.R")) %>% # no DATE but SIMU_D!!!
+    str_replace_all(pattern = "SIMU_D", SIMU_D) %>%
+    str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+    str_replace_all(pattern = "NCORE", NCORE) %>%
+    str_replace_all(pattern = "NLIM_1", NLIM_1) %>%
+    str_replace_all(pattern = "NLIM_2", NLIM_2) %>%
+    str_replace_all(pattern = "PARA_OUT", PARA_OUT) %>%
+    str_replace_all(pattern = "CAT", CAT) %>%
+    # no METHOD as the script should already have employed "METHOD"
+    write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{METHOD}_{DATE}.R"), 
+               append = FALSE)
+  
+  # category 4: sample size in [35.1, 50.1)
+  MEM = ifelse(METHOD == "disc", 10000*4, 10000) %>% as.character()
+  NCORE = max(5, min(80, round(200000/as.numeric(MEM), digits = -1))) %>% as.character()
+  NLIM_1 = 35.1 %>% as.character()
+  NLIM_2 = 50.1 %>% as.character()
+  CAT = 4 %>% as.character()
+  read_file("source_code/exam_sim_data.sh") %>% 
+    str_replace_all(pattern = "DATE", DATE) %>%
+    str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+    str_replace_all(pattern = "NCORE", NCORE) %>%
+    str_replace_all(pattern = "MEM", MEM) %>%
+    str_replace_all(pattern = "CAT", CAT) %>%
+    str_replace_all(pattern = "METHOD", METHOD) %>%
+    write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{METHOD}_{DATE}.sh"), 
+               append = FALSE)
+  # WORKINGDIRECTORY, NCORE, NLIM_1, NLIM_2, 
+  # PARA_OUT, SIMU_D, CAT
+  read_file(str_glue("source_code/exam_sim_data_{METHOD}.R")) %>% # no DATE but SIMU_D!!!
+    str_replace_all(pattern = "SIMU_D", SIMU_D) %>%
+    str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+    str_replace_all(pattern = "NCORE", NCORE) %>%
+    str_replace_all(pattern = "NLIM_1", NLIM_1) %>%
+    str_replace_all(pattern = "NLIM_2", NLIM_2) %>%
+    str_replace_all(pattern = "PARA_OUT", PARA_OUT) %>%
+    str_replace_all(pattern = "CAT", CAT) %>%
+    # no METHOD as the script should already have employed "METHOD"
+    write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{METHOD}_{DATE}.R"), 
+               append = FALSE)
+  
+  # category T1: Type 1 error rate and FDR
+  MEM = ifelse(METHOD == "disc", 2500*4, 2500) %>% as.character()
+  NCORE = max(5, min(80, round(200000/as.numeric(MEM), digits = -1))) %>% as.character()
+  NLIM_1 = 0 %>% as.character()
+  NLIM_2 = 12.1 %>% as.character()
+  CAT = "T1" %>% as.character()
+  read_file("source_code/exam_sim_data.sh") %>% 
+    str_replace_all(pattern = "DATE", DATE) %>%
+    str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+    str_replace_all(pattern = "NCORE", NCORE) %>%
+    str_replace_all(pattern = "MEM", MEM) %>%
+    str_replace_all(pattern = "CAT", CAT) %>%
+    str_replace_all(pattern = "METHOD", METHOD) %>%
+    write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{METHOD}_{DATE}.sh"), 
+               append = FALSE)
+  # WORKINGDIRECTORY, NCORE, NLIM_1, NLIM_2, 
+  # PARA_OUT, SIMU_D, CAT
+  read_file(str_glue("source_code/exam_sim_data_{METHOD}.R")) %>% # no DATE but SIMU_D!!!
+    str_replace_all(pattern = "SIMU_D", SIMU_D) %>%
+    str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
+    str_replace_all(pattern = "NCORE", NCORE) %>%
+    str_replace_all(pattern = "NLIM_1", NLIM_1) %>%
+    str_replace_all(pattern = "NLIM_2", NLIM_2) %>%
+    str_replace_all(pattern = "PARA_OUT", PARA_OUT) %>%
+    str_replace_all(pattern = "CAT", CAT) %>%
+    # no METHOD as the script should already have employed "METHOD"
+    write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{METHOD}_{DATE}.R"), 
+               append = FALSE)
+}
 
-# category 3: sample size in [20.1, 35.1)
-MEM = 7000 %>% as.character()
-NCORE = min(80, round(200000/as.numeric(MEM), digits = -1)) %>% as.character()
-NLIM_1 = 20.1 %>% as.character()
-NLIM_2 = 35.1 %>% as.character()
-CAT = 3 %>% as.character()
-read_file("source_code/exam_sim_data.sh") %>% 
-  str_replace_all(pattern = "DATE", DATE) %>%
-  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
-  str_replace_all(pattern = "NCORE", NCORE) %>%
-  str_replace_all(pattern = "MEM", MEM) %>%
-  str_replace_all(pattern = "CAT", CAT) %>%
-  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.sh"), 
-             append = FALSE)
-# WORKINGDIRECTORY, NCORE, NLIM_1, NLIM_2, 
-# PARA_OUT, SIMU_D, CAT
-read_file("source_code/exam_sim_data.R") %>% # no DATE but SIMU_D!!!
-  str_replace_all(pattern = "SIMU_D", SIMU_D) %>%
-  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
-  str_replace_all(pattern = "NCORE", NCORE) %>%
-  str_replace_all(pattern = "NLIM_1", NLIM_1) %>%
-  str_replace_all(pattern = "NLIM_2", NLIM_2) %>%
-  str_replace_all(pattern = "PARA_OUT", PARA_OUT) %>%
-  str_replace_all(pattern = "CAT", CAT) %>%
-  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.R"), 
-             append = FALSE)
-
-# category 4: sample size in [35.1, 50.1)
-MEM = 10000 %>% as.character()
-NCORE = min(80, round(200000/as.numeric(MEM), digits = -1)) %>% as.character()
-NLIM_1 = 35.1 %>% as.character()
-NLIM_2 = 50.1 %>% as.character()
-CAT = 4 %>% as.character()
-read_file("source_code/exam_sim_data.sh") %>% 
-  str_replace_all(pattern = "DATE", DATE) %>%
-  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
-  str_replace_all(pattern = "NCORE", NCORE) %>%
-  str_replace_all(pattern = "MEM", MEM) %>%
-  str_replace_all(pattern = "CAT", CAT) %>%
-  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.sh"), 
-             append = FALSE)
-# WORKINGDIRECTORY, NCORE, NLIM_1, NLIM_2, 
-# PARA_OUT, SIMU_D, CAT
-read_file("source_code/exam_sim_data.R") %>% # no DATE but SIMU_D!!!
-  str_replace_all(pattern = "SIMU_D", SIMU_D) %>%
-  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
-  str_replace_all(pattern = "NCORE", NCORE) %>%
-  str_replace_all(pattern = "NLIM_1", NLIM_1) %>%
-  str_replace_all(pattern = "NLIM_2", NLIM_2) %>%
-  str_replace_all(pattern = "PARA_OUT", PARA_OUT) %>%
-  str_replace_all(pattern = "CAT", CAT) %>%
-  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.R"), 
-             append = FALSE)
-
-# category T1: Type 1 error rate and FDR
-MEM = 2500 %>% as.character()
-NCORE = min(80, round(200000/as.numeric(MEM), digits = -1)) %>% as.character()
-NLIM_1 = 0 %>% as.character()
-NLIM_2 = 12.1 %>% as.character()
-CAT = "T1" %>% as.character()
-read_file("source_code/exam_sim_data.sh") %>% 
-  str_replace_all(pattern = "DATE", DATE) %>%
-  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
-  str_replace_all(pattern = "NCORE", NCORE) %>%
-  str_replace_all(pattern = "MEM", MEM) %>%
-  str_replace_all(pattern = "CAT", CAT) %>%
-  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.sh"), 
-             append = FALSE)
-# WORKINGDIRECTORY, NCORE, NLIM_1, NLIM_2, 
-# PARA_OUT, SIMU_D, CAT
-read_file("source_code/exam_sim_data.R") %>% # no DATE but SIMU_D!!!
-  str_replace_all(pattern = "SIMU_D", SIMU_D) %>%
-  str_replace_all(pattern = "WORKINGDIRECTORY", WORKINGDIRECTORY) %>%
-  str_replace_all(pattern = "NCORE", NCORE) %>%
-  str_replace_all(pattern = "NLIM_1", NLIM_1) %>%
-  str_replace_all(pattern = "NLIM_2", NLIM_2) %>%
-  str_replace_all(pattern = "PARA_OUT", PARA_OUT) %>%
-  str_replace_all(pattern = "CAT", CAT) %>%
-  write_file(file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.R"), 
-             append = FALSE)
 
 # exam_d = simu_d # simu_d is actually used to denote the results in the script,
 # "results" should correspond directly to simulated data
 ```
 
--  Example shell script (`r str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.sh")`)
+-  Example shell script (`r str_glue("para_data_sim/exam_sim_data_{CAT}_disc_{DATE}.sh")`)
 
-```{bash, file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.sh"), eval = FALSE}
+```{bash, file = str_glue("para_data_sim/exam_sim_data_{CAT}_disc_{DATE}.sh"), eval = FALSE}
 ```
 
--  Example R script (`r str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.R")`)
+-  Example R script for DiSC (`r str_glue("para_data_sim/exam_sim_data_{CAT}_disc_{DATE}.R")`)
 
-```{r, file = str_glue("para_data_sim/exam_sim_data_{CAT}_{DATE}.R"), eval = FALSE}
+```{r, file = str_glue("para_data_sim/exam_sim_data_{CAT}_disc_{DATE}.R"), eval = FALSE}
+```
+
+-  Example R script for IDEAS (`r str_glue("para_data_sim/exam_sim_data_{CAT}_ideas_{DATE}.R")`)
+
+```{r, file = str_glue("para_data_sim/exam_sim_data_{CAT}_ideas_{DATE}.R"), eval = FALSE}
+```
+
+-  Example R script for DESeq2 (`r str_glue("para_data_sim/exam_sim_data_{CAT}_deseq_{DATE}.R")`)
+
+```{r, file = str_glue("para_data_sim/exam_sim_data_{CAT}_deseq_{DATE}.R"), eval = FALSE}
 ```
 
 ## Examining the Association between Treatment and Transcriptomic profiles using Different Methods
 
-Run the scripts above on a supercomputer to test the association between phenotype and single-cell RNA sequencing data. The results will be saved as 'results_n{n_cas}_{n_ctr}_d{diff}_c{n_cell}v{neq_n_cell}{DATE}.RData.'"
-
+Run the scripts above on a supercomputer to test the association between phenotype and simulated single-cell RNA sequencing data. The results will be saved as 'results_{method}_n{n_cas}_{n_ctr}_d{diff}_c{n_cell}v{neq_n_cell}{DATE}.RData.'
 
 # Paramteric Simulations: Results
 
@@ -576,7 +609,8 @@ Summarizing results and investigating the type I error, false discovery rate (FD
 DATE = simu_d
 thre_raw = 0.05
 thre_adj = 0.10
-meths = c("DiSC", "IDEAS", "DESeq2") 
+METHOD_S = c("DiSC" = "disc", "IDEAS" = "ideas", "DESeq2" = "deseq")
+meths = names(METHOD_S) # displayed name
 
 summarize_binconf <- function(x, repl){
   # calculate the binomial confidence interval with x successes and repl trials
@@ -606,13 +640,19 @@ for(paras in parameters){
   n_stra = length(gene_index)
 
   conf <- str_glue("n{n_cas}_{n_ctr}_d{diff}_c{n_cell}_v{neq_n_cell}_{DATE}")
-  if(!file.exists(str_glue("para_data_sim/results_{conf}.RData")))
-    next
-  load(str_glue("para_data_sim/results_{conf}.RData")) # "disc_pval", "ideas_pval", "deseq_pval"
-  cat(str_glue("loaded {conf}\n"))
   
-  pval_list <- list(disc_pval, ideas_pval, deseq_pval)
-  names(pval_list) <- meths
+  for(method in METHOD_S){
+    filename <- str_glue("para_data_sim/results_{method}_{conf}.RData")
+    if(!file.exists(filename))
+      next
+    load(filename) # "disc_pval", "ideas_pval", "deseq_pval"
+    cat(str_glue("loaded {filename}"),"\n")
+  }
+  
+  eval(parse(text= str_c("assign('pval_list', list(", 
+                         str_c(str_c(METHOD_S, "_pval"), 
+                               collapse = ","), "))"))) #create a list of "_pval" in the order of "METHOD_S" 
+  names(pval_list) <- meths # displayed names of METHOD_S
   pval_list <- lapply(pval_list, function(x_pval){
     #convert the disc_pval to an array
     # temp <- array(unlist(disc_pval), 
@@ -766,6 +806,7 @@ for(paras in parameters){
     temp <- table(unlist(genes_identified))
     print(temp[which.max(temp)]) # not very often
   }
+  # rm(list = str_glue("{METHOD_S}_pval")) # remove the loaded .RData files
 }
 
 
@@ -777,9 +818,10 @@ for(paras in parameters){
 - Rename the factor levels for illustration
 
 ```{r results rename}
-meths = c("DiSC", "IDEAS", "DESeq2") 
+METHOD_S = c("DiSC" = "disc", "IDEAS" = "ideas", "DESeq2" = "deseq")
+meths = names(METHOD_S) # displayed name
 # from "Parameters Estimated from Real Data" part
-diff_ngene <- round(ngene*signal_density) 
+diff_ngene <- length(gene_index$mean_index)
 diff_ngene
 p_raw <- p_raw %>% 
   mutate(genestra = str_c("Difference in ",

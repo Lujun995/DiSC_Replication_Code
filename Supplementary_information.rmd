@@ -1,7 +1,7 @@
 ---
 title: "Supplementary Information"
 author: "Lujun Zhang and Jun Chen"
-date: "2023-09-24"
+date: "2024-08-12"
 output:
   html_document:
     number_sections: true
@@ -11,14 +11,14 @@ output:
 
 ## Required Packages
 
-- `doParallel`, `foreach`, `doRNG`, `Matrix`, `matrixStats`, `GUniFrac`, `tidyverse`, `data.table`, `peakRAM`, `ggpubr` from CRAN.
+- `doParallel`, `foreach`, `doRNG`, `Matrix`, `matrixStats`, `tidyverse`, `data.table`, `peakRAM`, `ggpubr` from CRAN.
 - `DESeq2` from Bioconductor.
 - `ideas` from [https://github.com/Sun-lab/ideas](https://github.com/Sun-lab/ideas).
 
 ## Required Dataset
 
 - **File:** "supp_info_anal/n12_12_d1.3_c375_vFALSE_0811_b1.RData"
-    +  The files "supp_info_anal/mem_results0827.RData," "supp_info_anal/nperm_results0827.RData," "supp_info_anal/rarefy_results0827.RData," and "supp_info_anal/time_results0821.RData" are saved cache to accelerate the rendering of the markdown file.
+    +  The files "supp_info_anal/mem_results0827.RData," "supp_info_anal/nperm_results0827.RData," and "supp_info_anal/time_results0821.RData" are saved cache to accelerate the rendering of the markdown file.
 - This dataset was generated in the "Generate Simulation Datasets" step in the "Parametric_simulation.rmd".
 - It contains 12 cases and 12 controls, each with 375 cell replicates.
 - The read depths of each cell replicate are well-balanced.
@@ -30,14 +30,12 @@ output:
 - Determine the number of permutations required for DiSC.
 - Compare the computational time of different methods.
 - Evaluate memory usage by DiSC.
-- Examine the impact of dropping a proportion of insufficiently sequenced cells during the rarefaction step on the results.
 
 
 ```{r setup, warning = FALSE, message=FALSE}
 library(DESeq2)
-# library(ideas)
+library(ideas)
 library(tidyverse)
-library(GUniFrac)
 library(matrixStats)
 library(knitr)
 library(kableExtra)
@@ -49,17 +47,22 @@ knitr::opts_chunk$set(echo = TRUE)
 set.seed(seed = 123456)
 
 # rm(list = ls())
-source("source_code/DiSC.R")
+file.copy(from = "source_code/DiSC.R", to = "supp_info_anal/DiSC.R",
+          copy.date = TRUE, overwrite  = TRUE)
+source("supp_info_anal/DiSC.R")
 load("supp_info_anal/n12_12_d1.3_c375_vFALSE_0811_b1.RData")
 dat_list[["meta_ind"]]$phenotype <- as.factor(dat_list[["meta_ind"]]$phenotype)
 dat_list[["meta_cell"]]$phenotype <- as.factor(dat_list[["meta_cell"]]$phenotype)
+count_matrix <- dat_list$count_matrix
+meta_cell <- dat_list$meta_cell
+meta_ind <- dat_list$meta_ind
+gene_index <- dat_list$gene_index
 ```
 
 # Description of the Data Set
 
 ```{r dat_list}
 str(dat_list)
-attach(dat_list)
 ngene = nrow(count_matrix)
 ngene
 nsamp = ncol(count_matrix)
@@ -70,7 +73,6 @@ table(meta_cell$individual)
 table(meta_ind$phenotype)
 sparsity = rowSums(count_matrix == 0)/ngene
 summary(sparsity)
-detach(dat_list)
 ```
 
 # Number of permutations
@@ -78,57 +80,51 @@ detach(dat_list)
 If adjusted p-values (FDR) are of primary interest, which is usually the case, setting `perm.no` = 99 will suffice and can accelarate the calculations while reducing memory usage.
 
 ```{r N.perm, results='asis'}
-attach(dat_list)
-
+set.seed(seed = 123456)
 fp <- "supp_info_anal/nperm_results0827.RData"
 if(file.exists(fp)){
   load(fp)
 } else {
-  rarefy_mat <- count_matrix %>% t() %>% 
-    GUniFrac::Rarefy(.) %>%
-    magrittr::extract2(., "otu.tab.rff") %>%
-    t()
-  
-  #default
-  obj1 <- DiSC(ct.mat = rarefy_mat,
+  # default
+  obj1 <- DiSC(data.mat = count_matrix,
                cell.ind = meta_cell,
                metadata = meta_ind,
                outcome = "phenotype", covariates = "RIN",
                cell.id = "cell_id",
                individual.id = "individual", 
-               perm.no = 999, verbose = FALSE) 
+               perm.no = 999, verbose = FALSE, sequencing.data = TRUE) 
   
-  obj2 <- DiSC(ct.mat = rarefy_mat,
+  obj2 <- DiSC(data.mat = count_matrix,
                cell.ind = meta_cell,
                metadata = meta_ind,
                outcome = "phenotype", covariates = "RIN",
                cell.id = "cell_id",
                individual.id = "individual", 
-               perm.no = 499, verbose = FALSE) 
+               perm.no = 499, verbose = FALSE, sequencing.data = TRUE) 
   
   #for fdr calculation
-  obj3 <- DiSC(ct.mat = rarefy_mat,
+  obj3 <- DiSC(data.mat = count_matrix,
                cell.ind = meta_cell,
                metadata = meta_ind,
                outcome = "phenotype", covariates = "RIN",
                cell.id = "cell_id",
                individual.id = "individual", 
-               perm.no = 99, verbose = FALSE)
+               perm.no = 99, verbose = FALSE, sequencing.data = TRUE)
   
-  obj4 <- DiSC(ct.mat = rarefy_mat,
+  obj4 <- DiSC(data.mat = count_matrix,
                cell.ind = meta_cell,
                metadata = meta_ind,
                outcome = "phenotype", covariates = "RIN",
                cell.id = "cell_id",
                individual.id = "individual", 
-               perm.no = 49, verbose = FALSE) 
+               perm.no = 49, verbose = FALSE, sequencing.data = TRUE)
   save(obj1, obj2, obj3, obj4, file = fp)
 }
 
 
 gene_stra <- unlist(gene_index) %>% 
   sort() %>% names() %>% str_extract(pattern = "\\w+_index")
-gene_stra[gene_index$mean_index[1:10]]
+gene_stra[gene_index$mean_index[1:10]] # mean_index
 meths = c("p.raw", "p.adj.fdr")
 
 for(me in meths){
@@ -148,9 +144,16 @@ for(me in meths){
         caption = str_glue("Influence of the number of permutations in P values ({flag})")) %>% 
     kable_classic(full_width = F, html_font = "Cambria") %>%
     print()
+  N_perm_table <- N_perm_results %>% select(-`Gene stratum`) %>%
+    group_by(`P value category`) %>% 
+    slice_head(n = 1) %>%
+    kbl(digits = 4, 
+        caption = str_glue("Influence of the number of permutations in P values ({flag})")) %>% 
+    kable_classic(full_width = F, html_font = "Cambria")
+  save_kable(N_perm_table, file = str_glue("results/N_perm_{flag}.jpeg"), 
+             density = 1000, zoom = 2.5)
+  print(N_perm_table)
 }
-
-detach(dat_list)
 ```
 
 # Computational time
@@ -163,6 +166,7 @@ detach(dat_list)
 ##  Calculations
 
 ```{r computational time examination, message = FALSE}
+set.seed(seed = 123456)
 fp <- "supp_info_anal/time_results0821.RData"
 if(file.exists(fp))
   load(fp) else
@@ -204,18 +208,14 @@ if(file.exists(fp))
     
     disc_wrapper <- function(dat_list_temp){
       with(dat_list_temp, suppressMessages({
-        rarefy_mat <- count_matrix %>% t() %>% 
-          GUniFrac::Rarefy(.) %>%
-          magrittr::extract2(., "otu.tab.rff") %>%
-          t()
-        #default
-        obj1 <- DiSC(ct.mat = rarefy_mat,
+        # default
+        obj1 <- DiSC(data.mat = count_matrix,
                      cell.ind = meta_cell,
                      metadata = meta_ind,
                      outcome = "phenotype", covariates = "RIN",
                      cell.id = "cell_id",
                      individual.id = "individual", 
-                     perm.no = 999, verbose = FALSE)
+                     perm.no = 999, verbose = FALSE, sequencing.data = TRUE)
       }))
     }
     
@@ -285,12 +285,39 @@ if(file.exists(fp))
     }
     
     #canonical case with ~8000 genes and ~24 samples
-    res_c <- microbenchmark::microbenchmark(disc_wrapper(dat_list), times = 5)
-    
-    save(results, parameters, setups, disc_wrapper, res_c,
-         ideas_wrapper, deseq_wrapper, NGENES, NCELL, NSAMPLE,
+    dat_list_temp <- setups(dat_list, ngene = 8000, 
+                            ncell = 30, nsample = 3)
+    res_c <- microbenchmark::microbenchmark(
+      disc_wrapper(dat_list), #8,000 genes, 24 individuals, and 9,000 cells
+      disc_wrapper(dat_list_temp), #8,000 genes, 6 individuals, and 180 cells
+      times = 5)
+        
+    save(results, res_c,
+         parameters, setups, 
+         disc_wrapper, ideas_wrapper, deseq_wrapper, 
+         NGENES, NCELL, NSAMPLE,
          file = fp)
   }
+
+```
+
+##  Results
+
+```{r computational time results, fig.width=6, fig.height=3}
+#canonical case with 8000 genes and 24 samples
+res_c$time <- res_c$time/1e9
+cat("Analyzing DE genes in a typical scRNA-seq dataset with 8,000 genes, 24 individuals, and 9,000 cells (375 per individual) using DiSC took", 
+    round(mean(res_c$time[res_c$expr == "disc_wrapper(dat_list)"]), 2), 
+    "seconds") #canonical case with 8000 genes and 24 samples, in seconds
+cat("Analyzing DE genes in a scRNA-seq dataset with 8,000 genes, 6 individuals, and 180 cells (30 per individual) using DiSC took", 
+    round(mean(res_c$time[res_c$expr == "disc_wrapper(dat_list_temp)"]), 2), 
+    "seconds, which is predicted to be",
+    round(predict(lm(data = results, formula = time/1e9~ngene, 
+               subset = (expr == "disc_wrapper(dat_list_temp)" & 
+                           ncell == NCELL[1] & nsample == NSAMPLE[1])), 
+            newdata = data.frame(ngene = 8000)), 2)
+) #canonical case with 8000 genes and 24 samples, in seconds
+
 meths = c("DiSC", "IDEAS", "DESeq2")
 results <- results %>%
   mutate(time = time/1e9) %>%
@@ -299,22 +326,14 @@ results <- results %>%
                              DESeq2 = "deseq_wrapper(dat_list_temp)",
                              IDEAS = "ideas_wrapper(dat_list_temp)")) %>%
   mutate(method = fct_relevel(method, meths))
-```
-
-##  Results
-
-```{r computational time results, fig.width=6, fig.height=3}
-#canonical case with 8000 genes and 24 samples
-res_c$time <- res_c$time/1e9
-mean(res_c$time) #canonical case with 8000 genes and 24 samples, in seconds
 
 fig1 <- results %>% 
   filter(ngene == NGENES[1], ncell == NCELL[1]) %>%
-  ggplot(aes(x = nsample, y= time, color = method)) + 
+  ggplot(aes(x = nsample*2, y= time, color = method)) + # nsample *2 for two arms 
   geom_point(size=0.3) + 
   geom_smooth(method = "lm", formula = y ~ x, se = TRUE, linewidth = 0.3) +
   xlab("Sample Sizes") + ylab("Time / s") + 
-  scale_y_log10(limits = c(1, 150)) +
+  scale_y_log10(limits = c(1, 200)) +
   scale_color_brewer(palette = "Set1", name = "Method") +
   theme_bw()
 fig2 <- results %>% 
@@ -323,7 +342,7 @@ fig2 <- results %>%
   geom_point(size=0.3) + 
   geom_smooth(method = "lm", formula = y ~ x, se = TRUE, linewidth = 0.3) +
   xlab("Number of genes") + ylab("Time / s") +
-  scale_y_log10(limits = c(1, 150)) +
+  scale_y_log10(limits = c(1, 200)) +
   scale_color_brewer(palette = "Set1", name = "Method") +
   theme_bw()
 fig3 <- results %>% 
@@ -332,7 +351,7 @@ fig3 <- results %>%
   geom_point(size=0.3) + 
   geom_smooth(method = "lm", formula = y ~ x, se = TRUE, linewidth = 0.3) +
   xlab("Number of cells") + ylab("Time / s") +
-  scale_y_log10(limits = c(1, 150)) +
+  scale_y_log10(limits = c(1, 200)) +
   scale_color_brewer(palette = "Set1", name = "Method") +
   theme_bw()
 
@@ -353,198 +372,44 @@ ggsave(filename = "results/comp_time.pdf", time_fig,
 -  Peak memory usage may vary between runs due to autonomous garbage collection in R.
 
 ```{r memory, results='asis'}
-attach(dat_list)
+set.seed(seed = 123456)
 #default
 fp <- "supp_info_anal/mem_results0827.RData"
 if(file.exists(fp))
 {
   load(fp)
 } else {
+  gc()
+  gc()
   mem_df <- peakRAM({
-    rarefy_mat <- count_matrix %>% t() %>% 
-      GUniFrac::Rarefy(.) %>%
-      magrittr::extract2(., "otu.tab.rff") %>%
-      t()
-  }, {# default
-    obj1 <- DiSC(ct.mat = rarefy_mat,
+    # default
+    obj1 <- DiSC(data.mat = count_matrix,
                  cell.ind = meta_cell,
                  metadata = meta_ind,
                  outcome = "phenotype", covariates = "RIN",
                  cell.id = "cell_id",
                  individual.id = "individual", 
-                 perm.no = 999, verbose = FALSE) 
-  }, {# for FDR calculation
-    obj3 <- DiSC(ct.mat = rarefy_mat,
+                 perm.no = 999, verbose = FALSE, sequencing.data = TRUE) 
+  }, {
+    # for FDR calculation
+    obj3 <- DiSC(data.mat = count_matrix,
                  cell.ind = meta_cell,
                  metadata = meta_ind,
                  outcome = "phenotype", covariates = "RIN",
                  cell.id = "cell_id",
                  individual.id = "individual", 
-                 perm.no = 99, verbose = FALSE) 
+                 perm.no = 99, verbose = FALSE, sequencing.data = TRUE) 
   })
   save(mem_df, file = fp)
 }
 
 
-mem_df$Function_Call <- c("rarefaction", "N.perm = 999" , "N.perm = 99")
+mem_df$Function_Call <- c("N.perm = 999" , "N.perm = 99")
 mem_df %>% 
   kbl(digits = 5, 
       caption = str_glue("Peak momory usage")) %>% 
   kable_classic(full_width = F, html_font = "Cambria") %>%
   print()
-detach(dat_list)
-```
-
-# Robustness of Discarding Insufficiently Sequenced Samples
-
-```{r}
-disc_wrapper <- function(dat_list_temp, rarefy = TRUE){
-  count_matrix <- dat_list_temp$count_matrix
-  meta_ind <- dat_list_temp$meta_ind
-  meta_cell <- dat_list_temp$meta_cell
-  gene_index <- dat_list_temp$gene_index
-  
-  if(rarefy){
-    rarefy_mat <- count_matrix %>% t() %>% 
-      GUniFrac::Rarefy(.) %>%
-      magrittr::extract2(., "otu.tab.rff") %>%
-      t()
-    obj1 <- 
-      DiSC(ct.mat = rarefy_mat, cell.ind = meta_cell,
-           metadata = meta_ind, outcome = "phenotype", covariates = "RIN",
-           cell.id = "cell_id", individual.id = "individual", 
-           perm.no = 999, verbose = FALSE)
-  } else {
-    obj1 <- 
-      DiSC(ct.mat = count_matrix, cell.ind = meta_cell,
-           metadata = meta_ind, outcome = "phenotype", covariates = "RIN",
-           cell.id = "cell_id", individual.id = "individual", 
-           perm.no = 999, verbose = FALSE)
-  }
-  
-  return(obj1)
-}
-setups <- function(dat_list, discard = NULL){
-  count_matrix <- dat_list$count_matrix
-  gene_index <- dat_list$gene_index
-  meta_ind <- dat_list$meta_ind
-  meta_cell <- dat_list$meta_cell
-  
-  if(!is.null(discard)){
-    depth = round(quantile(meta_cell$cell_rd, probs = discard))
-    flag = which(meta_cell$cell_rd >= depth)
-    meta_cell <- meta_cell[flag, ]
-    count_matrix <- count_matrix[, meta_cell$cell_id]
-  }
-  
-  return(list(count_matrix = count_matrix, gene_index = gene_index,
-              meta_ind = meta_ind, meta_cell = meta_cell))
-}
-settings <- c(
-  "discard = NULL; rarefy = TRUE",
-  "discard = NULL; rarefy = FALSE",
-  "discard = 0.05; rarefy = TRUE",
-  "discard = 0.10; rarefy = TRUE",
-  "discard = 0.15; rarefy = TRUE",
-  "discard = 0.20; rarefy = TRUE"
-)
-results_raw <- results_adj <-
-  matrix(NA_real_, nrow = nrow(dat_list$count_matrix),
-         ncol = length(settings), 
-         dimnames = list(rownames(dat_list$count_matrix),
-                         settings))
-gene_stra <- unlist(dat_list$gene_index) %>% 
-  sort() %>% names() %>% str_extract(pattern = "\\w+_index")
-gene_stra[dat_list$gene_index$mean_index[1:10]] #mean_index
-
-fp <- "supp_info_anal/rarefy_results0827.RData" 
-if(file.exists(fp)){
-  load(fp)
-} else {
-  for(se in settings){
-    eval(parse(text=se))
-    dat_list_temp <- setups(dat_list = dat_list, discard = discard)
-    print(dim(dat_list_temp$count_matrix))
-    obj <- disc_wrapper(dat_list_temp, rarefy = rarefy)
-    results_adj[, se] <- obj$p.adj.fdr
-    results_raw[, se] <- obj$p.raw
-  }
-  save(results_raw, results_adj, settings, 
-       file = fp)
-}
 ```
 
 
-
-```{r, fig.width=8, fig.height=3}
-results_raw <- as_tibble(results_raw) %>%
-  dplyr::rename(keep100 = "discard = NULL; rarefy = TRUE",
-                no_rarefy = "discard = NULL; rarefy = FALSE",
-                keep95 = "discard = 0.05; rarefy = TRUE",
-                keep90 = "discard = 0.10; rarefy = TRUE",
-                keep85 = "discard = 0.15; rarefy = TRUE",
-                keep80 = "discard = 0.20; rarefy = TRUE") %>%
-  mutate(`P value category` = cut(keep100, breaks = c(-1, 0.001, 0.01, 0.05, 0.10, +Inf),
-                                  labels = c("<= 0.001", "0.001 - 0.01", "0.01 - 0.05", 
-                                             "0.05 - 0.10", "> 0.10")),
-         `Gene stratum` = gene_stra) 
-results_raw %>% 
-  group_by(`P value category`, `Gene stratum`) %>% 
-  slice_head(n = 1) %>%
-  select(-no_rarefy) %>% 
-  kbl(digits = 3, 
-      caption = "Influence of discarding insufficiently sequenced samples in raw P values") %>% 
-  kable_classic(full_width = F, html_font = "Cambria")
-fig.1 <- results_raw %>%
-  select(-no_rarefy, -`P value category`) %>%
-  pivot_longer(cols = paste("keep", c(100,95,90,85,80), sep = ""), 
-               names_to = "keep_p", values_to = "pval") %>%
-  group_by(`Gene stratum`, keep_p) %>%
-  summarize(n_sig = sum(pval <= 0.05)) %>%
-  ungroup() %>%
-  mutate(keep_p = as.numeric(str_remove(keep_p,"keep"))) %>%
-  ggplot(aes(x= keep_p, y = n_sig, color = `Gene stratum`)) +
-  geom_point() + geom_line() + 
-  xlab("Percentage of deep-sequence samples") + scale_x_reverse()+
-  ylab("Number of findings, raw P") + 
-  theme_bw() + scale_color_brewer(palette = "Set1")
-
-results_adj <- as_tibble(results_adj) %>%
-  dplyr::rename(keep100 = "discard = NULL; rarefy = TRUE",
-                no_rarefy = "discard = NULL; rarefy = FALSE",
-                keep95 = "discard = 0.05; rarefy = TRUE",
-                keep90 = "discard = 0.10; rarefy = TRUE",
-                keep85 = "discard = 0.15; rarefy = TRUE",
-                keep80 = "discard = 0.20; rarefy = TRUE") %>%
-  mutate(`P value category` = cut(keep100, breaks = c(-1, 0.001, 0.01, 0.05, 0.10, +Inf),
-                                  labels = c("<= 0.001", "0.001 - 0.01", "0.01 - 0.05", 
-                                             "0.05 - 0.10", "> 0.10")),
-         `Gene stratum` = gene_stra) 
-results_adj %>% 
-  group_by(`P value category`, `Gene stratum`) %>% 
-  slice_head(n = 1) %>%
-  select(-no_rarefy) %>% 
-  kbl(digits = 3, 
-      caption = "Influence of discarding insufficiently sequenced samples in adjusted P values") %>% 
-  kable_classic(full_width = F, html_font = "Cambria")
-fig.2 <- results_adj %>%
-  select(-no_rarefy, -`P value category`) %>%
-  pivot_longer(cols = paste("keep", c(100,95,90,85,80), sep = ""), 
-               names_to = "keep_p", values_to = "pval") %>%
-  group_by(`Gene stratum`, keep_p) %>%
-  summarize(n_sig = sum(pval <= 0.10)) %>%
-  ungroup() %>%
-  mutate(keep_p = as.numeric(str_remove(keep_p,"keep"))) %>%
-  ggplot(aes(x= keep_p, y = n_sig, color = `Gene stratum`)) +
-  geom_point() + geom_line() + 
-  xlab("Percentage of deep-sequence samples") + scale_x_reverse()+
-  ylab("Number of findings, adjusted P") + 
-  theme_bw() + scale_color_brewer(palette = "Set1")
-
-fig_discarding <- 
-  lemon::grid_arrange_shared_legend(fig.1, fig.2, position = "right")
-ggsave(filename = "results/discarding.jpeg", plot = fig_discarding,
-       width = 8, height = 3)
-ggsave(filename = "results/discarding.pdf", plot = fig_discarding,
-       width = 8, height = 3)
-```
