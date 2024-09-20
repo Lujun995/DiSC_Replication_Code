@@ -105,7 +105,7 @@ read_file("source_code/COVID_PBMC_anal.sh") %>%
 -  Results
 
 ```{r covid-pbmc res, fig.width=8, fig.height=10}
-pval_thre = 0.05 # the FDR threshold
+pval_thre = 0.10 # the FDR threshold
 #list the results and convert them to a dataframe
 res <- list.files("real_data_anal/res/") %>% 
   # should look like "d@COVIDPBMC-m@DESeq2-v@0612-c@B_cell.rds"
