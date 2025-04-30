@@ -1,6 +1,6 @@
 # DiSC_Replication_Code
 
-This folder contains scripts, data, and R markdown files that can be used to reproduce the results presented in our paper. In the main directory, you will find four markdown files along with their corresponding HTML outputs: **Real_data_simulation.html**, **Parametric_simulation.html**, **Real_data_analysis.html**, and **Supplementary_information.html**. We recommend starting a code review with the four R markdown outputs in HTML format. Additionally, there are several subfolders for organizing data, source code, scripts, parameters, intermediate results, and more.
+This folder contains scripts, data, and R markdown files that can be used to reproduce the results presented in our paper. In the main directory, you will find four markdown files along with their corresponding HTML outputs: **Real_data_simulation.html**, **Parametric_simulation.html**, **Real_data_analysis.html**, **Supplementary_information.html**, and **Response_to_Reviewers.html**. We recommend starting a code review with these R markdown outputs in HTML format. Additionally, there are several subfolders for organizing data, source code, scripts, parameters, intermediate results, and more.
 
 ## Simulations Based on Real-World Data
 
@@ -35,6 +35,13 @@ This folder contains scripts, data, and R markdown files that can be used to rep
 - **Corresponding Data Folder:** supp_info_anal
 - **Description:** The example data set used for these analyses was generated in the "Simulations Based on Parametric Models" step. It includes 8,000 genes and 12 cases and 12 controls, each with 375 cell replicates. The objectives are to (i) determine the number of permutations required for DiSC; (ii) compare the computational time of different methods; (iii) evaluate memory usage by DiSC; and (iv) examine the impact of dropping a proportion of insufficiently sequenced cells during the rarefaction step on the results.
 
+## Response to Reviewers
+
+- **R Markdown:** Response_to_Reviewers.rmd
+- **R Markdown Output:** Response_to_Reviewers.html
+- **Corresponding Data Folder:** res_to_rev
+- **Description:** The code and scripts used to address the reviewers' concerns and incorporate their suggestions. Results generated in this part are annotated with "_rev" in the **results** folder.
+
 ## Other Subdirectories
 
 - **ideas_pipeline-main:** This folder contains scRNA-seq data from the prefrontal cortex (PFC) region of both autism patients and healthy controls, sourced from Velmeshev et al. (2019). The folder also hosts source code necessary for the DCA-IDEAS method, as discussed in Zhang et al. (2022). These contents were adapted from the [ideas_pipeline](https://github.com/Sun-lab/ideas_pipeline/) by Zhang et al. (2022).
@@ -43,6 +50,7 @@ This folder contains scripts, data, and R markdown files that can be used to rep
 
 ## References
 
+- Zhang, L., Yang, L., Ren, Y., Zhang, S., Guan, W., & Chen, J. (Submitted to Bioinformatics): DiSC: a Statistical Tool for Fast Differential Expression Analysis of Individual-level Single-cell RNA-seq Data.
 - Eraslan, G., et al. Single-cell RNA-seq denoising using a deep count autoencoder. *Nature communications*, 10.1 (2019): 1-14.
 - Velmeshev, D., et al. Single-cell genomics identifies cell type–specific molecular changes in autism. *Science*, 364.6441 (2019): 685-689.
 - Zhang, M., et al. IDEAS: individual level differential expression analysis for single-cell RNA-seq data. *Genome Biol*, 23, 33 (2022). [DOI](https://doi.org/10.1186/s13059-022-02605-1).
