@@ -2,6 +2,8 @@
 
 This folder contains scripts, data, and R markdown files that can be used to reproduce the results presented in our paper. In the main directory, you will find four markdown files along with their corresponding HTML outputs: **Real_data_simulation.html**, **Parametric_simulation.html**, **Real_data_analysis.html**, **Supplementary_information.html**, and **Response_to_Reviewers.html**. We recommend starting a code review with these R markdown outputs in HTML format. Additionally, there are several subfolders for organizing data, source code, scripts, parameters, intermediate results, and more.
 
+**Cautionary Note:** In this replication code, the feature "nzm" used in the `DiSC` function corresponds to the sample mean. In our package `SingleCellStat` (version 0.3.1), this has been corrected to "m" for clarity. However, to maintain backward compatibility, the replication code continues to use "nzm" to represent the sample mean while the `DiSC` function in this context does not accept "m" as a feature.
+
 ## Simulations Based on Real-World Data
 
 - **R Markdown:** Real_data_simulation.Rmd
